@@ -3,7 +3,6 @@ mod auth;
 mod console;
 mod db;
 mod http;
-mod string;
 
 use console::Colorize;
 
