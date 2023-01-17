@@ -5,17 +5,23 @@ pub mod oauth;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-struct AuthRequest {
+struct AuthenticateQuery {
+  current_login: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthorizedQuery {
   code: String,
+  state: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct AuthQuery {
   token: String,
-  user: String,
+  user: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UserIDQuery {
-  user: String,
+  user: Option<String>,
 }

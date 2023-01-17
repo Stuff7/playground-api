@@ -300,17 +300,23 @@ pub trait Colorize {
   {
     self.bold().underline().rgb(255, 75, 75)
   }
-  fn info(&self) -> String
-  where
-    Self: Display,
-  {
-    self.idcolor(222)
-  }
   fn success(&self) -> String
   where
     Self: Display,
   {
     self.bold().underline().bgreen()
+  }
+  fn info(&self) -> String
+  where
+    Self: Display,
+  {
+    self.bold().underline().rgb(240, 105, 255)
+  }
+  fn log(&self) -> String
+  where
+    Self: Display,
+  {
+    self.idcolor(222)
   }
 }
 

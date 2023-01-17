@@ -1,10 +1,12 @@
 use axum::http::HeaderMap;
 use serde::de::DeserializeOwned;
 
-use crate::api::{APIError, APIResponseResult};
+use crate::api::{APIError, APIResult};
+
+const CONTENT_LENGTH: usize = 2 * 1024 * 1000; // 2MB
+const FIRST_CONTENT_LENGTH: usize = 5 * 1024 * 1000; // 5MB
 
 pub fn get_range(headers: HeaderMap) -> (usize, usize) {
-  let default_length = 5_120_000_usize; // 5MB
   let raw_range = match headers.get("Range") {
     Some(header) => header
       .to_str()
@@ -14,7 +16,7 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
       .split("-")
       .map(|v| v.parse::<usize>().ok())
       .collect::<Vec<_>>(),
-    None => vec![Some(0), Some(default_length)],
+    None => vec![Some(0), Some(FIRST_CONTENT_LENGTH)],
   };
 
   let start = raw_range
@@ -23,18 +25,21 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
     .unwrap_or_default()
     .unwrap_or_default();
 
-  let end = raw_range
-    .get(1)
-    .copied()
-    .unwrap_or_default()
-    .unwrap_or(start + default_length);
+  let end = raw_range.get(1).copied().unwrap_or_default().unwrap_or(
+    start
+      + if start == 0 {
+        FIRST_CONTENT_LENGTH
+      } else {
+        CONTENT_LENGTH
+      },
+  );
 
   (start, end)
 }
 
 pub async fn json_response<T: serde::de::DeserializeOwned>(
   response: reqwest::Response,
-) -> APIResponseResult<JsonResult<T>> {
+) -> APIResult<JsonResult<T>> {
   let status_code = response.status();
 
   if status_code.is_client_error() || status_code.is_server_error() {
@@ -43,7 +48,10 @@ pub async fn json_response<T: serde::de::DeserializeOwned>(
     );
   }
 
-  let response_text = response.text().await?;
+  let response_text = response
+    .text()
+    .await
+    .map_err(|_| APIError::Internal("Response has no body".into()))?;
   let typed = serde_json::from_str::<T>(&response_text);
   match typed {
     Ok(file) => Ok(JsonResult::Typed(file)),

@@ -5,13 +5,13 @@ mod db;
 mod http;
 mod string;
 
-use anyhow::Context;
 use console::Colorize;
 
 use format as f;
 
 use axum::{http::HeaderValue, Router};
 use std::net::SocketAddr;
+use thiserror::Error;
 use tokio::signal;
 use tower_http::cors::CorsLayer;
 
@@ -47,8 +47,8 @@ async fn main() {
     .unwrap_or_exit("Failed to start server");
 }
 
-pub fn env_var(var_name: &str) -> anyhow::Result<String> {
-  std::env::var(var_name).context(f!("Missing env var: {var_name}").err())
+pub fn env_var(var_name: &str) -> AppResult<String> {
+  std::env::var(var_name).map_err(|_| AppError::Env(var_name.to_string()))
 }
 
 async fn shutdown_signal() {
@@ -74,10 +74,7 @@ async fn shutdown_signal() {
     _ = terminate => {},
   }
 
-  println!(
-    "{}",
-    "Signal received, starting graceful shutdown".success()
-  );
+  println!("{}", "Signal received, starting graceful shutdown".info());
 }
 
 trait GracefulExit<T> {
@@ -92,9 +89,19 @@ where
     match self {
       Ok(t) => t,
       Err(e) => {
-        println!("{}", f!("{msg}: {e}").info());
+        println!("{}", f!("{msg}: {e}").log());
         std::process::exit(0)
       }
     }
   }
 }
+
+#[derive(Error, Debug)]
+pub enum AppError {
+  #[error("Missing env var: {}", .0.err())]
+  Env(String),
+  #[error("{}", .0.to_string().err())]
+  UrlParsing(#[from] oauth2::url::ParseError),
+}
+
+type AppResult<T = ()> = Result<T, AppError>;

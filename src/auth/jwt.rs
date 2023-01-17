@@ -2,12 +2,19 @@ use std::fmt::Debug;
 
 use crate::GracefulExit;
 
-use format as f;
-
-use anyhow::Context;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+
+#[derive(Debug, thiserror::Error)]
+pub enum JWTError {
+  #[error("Error signing JWT: {}\n{:?}", 0.0, 0.1)]
+  Signing(jsonwebtoken::errors::Error),
+  #[error("Error decoding JWT: {0}")]
+  Decoding(#[from] jsonwebtoken::errors::Error),
+}
+
+type JWTResult<T = ()> = Result<T, JWTError>;
 
 struct Keys {
   pub encoding: EncodingKey,
@@ -28,11 +35,10 @@ static KEYS: Lazy<Keys> = Lazy::new(|| {
   Keys::new(secret.as_bytes())
 });
 
-pub fn sign_token<T: Serialize + Debug>(data: &T) -> anyhow::Result<String> {
-  encode(&Header::default(), data, &KEYS.encoding).context(f!("Failed to sign token for {data:?}"))
+pub fn sign_token<T: Serialize + Debug>(data: &T) -> JWTResult<String> {
+  encode(&Header::default(), data, &KEYS.encoding).map_err(|err| JWTError::Signing(err))
 }
 
-pub fn decode_token<T: serde::de::DeserializeOwned>(token: &str) -> anyhow::Result<TokenData<T>> {
-  decode::<T>(token, &KEYS.decoding, &Validation::default())
-    .context(f!("Failed to decode token {token:?}"))
+pub fn decode_token<T: serde::de::DeserializeOwned>(token: &str) -> JWTResult<TokenData<T>> {
+  decode::<T>(token, &KEYS.decoding, &Validation::default()).map_err(JWTError::from)
 }

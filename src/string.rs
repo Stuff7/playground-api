@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::ops::Deref;
 
 pub fn title(value: impl Deref<Target = str>) -> String {

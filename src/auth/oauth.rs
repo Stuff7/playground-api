@@ -1,11 +1,17 @@
 use oauth2::{
-  basic::{BasicClient, BasicTokenType},
+  basic::{BasicClient, BasicErrorResponseType, BasicTokenType},
   reqwest::async_http_client,
-  AuthorizationCode, EmptyExtraTokenFields, RefreshToken, StandardTokenResponse, TokenResponse,
+  AuthorizationCode, EmptyExtraTokenFields, RefreshToken, RequestTokenError, StandardErrorResponse,
+  StandardTokenResponse, TokenResponse,
 };
-use reqwest::Response;
+use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+type AsyncRequestError = RequestTokenError<
+  oauth2::reqwest::Error<reqwest::Error>,
+  StandardErrorResponse<BasicErrorResponseType>,
+>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Token {
@@ -27,7 +33,7 @@ impl From<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>> for Toke
 }
 
 impl Token {
-  pub async fn exchange(client: &BasicClient, code: String) -> anyhow::Result<Self> {
+  pub async fn exchange(client: &BasicClient, code: String) -> OAuthResult<Self> {
     let token = client
       .exchange_code(AuthorizationCode::new(code))
       .request_async(async_http_client)
@@ -35,7 +41,7 @@ impl Token {
     Ok(token.into())
   }
 
-  pub async fn refresh(&mut self, client: &BasicClient) -> anyhow::Result<&Self> {
+  pub async fn refresh(&mut self, client: &BasicClient) -> OAuthResult<&Self> {
     if let Some(refresh_token) = &self.refresh_token {
       let token = client
         .exchange_refresh_token(&RefreshToken::new(refresh_token.clone()))
@@ -44,19 +50,19 @@ impl Token {
       *self = token.into();
       return Ok(self);
     }
-    Err(TokenError::NoRefreshToken.into())
+    Err(OAuthError::NoRefreshToken.into())
   }
 
   pub async fn request(
     &mut self,
     oauth_client: &BasicClient,
     request: reqwest::RequestBuilder,
-  ) -> Result<Response, TokenError> {
+  ) -> OAuthResult<Response> {
     match self
       .try_request(
         request
           .try_clone()
-          .ok_or_else(|| TokenError::InvalidRequestBody)?,
+          .ok_or_else(|| OAuthError::InvalidRequestBody)?,
       )
       .await
     {
@@ -68,24 +74,28 @@ impl Token {
     }
   }
 
-  async fn try_request(&self, request: reqwest::RequestBuilder) -> Result<Response, TokenError> {
+  async fn try_request(&self, request: reqwest::RequestBuilder) -> OAuthResult<Response> {
     request
       .bearer_auth(self.access_token.clone())
       .send()
       .await?
       .error_for_status()
-      .map_err(TokenError::from)
+      .map_err(|err| OAuthError::BadStatus(err.status().unwrap_or(StatusCode::UNAUTHORIZED)))
   }
 }
 
 #[derive(Error, Debug)]
-pub enum TokenError {
-  #[error("Oauth request returned bad status")]
-  BadStatus(#[from] reqwest::Error),
-  #[error("Oauth request body cannot be cloned")]
+pub enum OAuthError {
+  #[error(transparent)]
+  Exchange(#[from] AsyncRequestError),
+  #[error(transparent)]
+  Request(#[from] reqwest::Error),
+  #[error("Bad request status: {0}")]
+  BadStatus(StatusCode),
+  #[error("Could not handle request body")]
   InvalidRequestBody,
   #[error("Missing refresh token")]
   NoRefreshToken,
-  #[error("Invalid refresh token")]
-  InvalidRefreshToken(#[from] anyhow::Error),
 }
+
+type OAuthResult<T> = Result<T, OAuthError>;

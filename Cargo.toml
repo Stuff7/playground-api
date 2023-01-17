@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0"
 axum = { version = "0.6.1", features = ["headers"] }
 jsonwebtoken = "8.2.0"
 oauth2 = "4.3.0"
