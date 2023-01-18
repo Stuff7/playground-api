@@ -77,7 +77,7 @@ pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
     "token.expires_seconds": token.expires_seconds as f32,
   };
   if let Some(refresh_token) = token.refresh_token {
-    update.insert("refresh_token", refresh_token);
+    update.insert("token.refresh_token", refresh_token);
   }
   providers
     .find_one_and_update(doc! { "_id": id }, doc! { "$set": update }, None)
