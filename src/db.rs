@@ -3,94 +3,125 @@ use crate::{
     jwt::{self, JWTError},
     oauth::Token,
   },
-  GracefulExit,
+  console::Colorize,
+  env_var, log, GracefulExit,
 };
 
-use once_cell::sync::Lazy;
-use std::{
-  collections::{HashMap, HashSet},
-  fs,
+use mongodb::{
+  bson::doc,
+  options::{ClientOptions, ReplaceOptions, ResolverConfig},
+  Client,
 };
+use once_cell::sync::{Lazy, OnceCell};
+use std::collections::HashSet;
 use thiserror::Error;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
-const DATABASE_PATH: &str = "db.json";
+// First we load the database within the main async runtime
+static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
+// Then we get the database lazily, exiting the app if the database was not initialized
+static DATABASE: Lazy<&Database> = Lazy::new(|| {
+  DATABASE_RESULT
+    .get()
+    .ok_or_else(|| DBError::Uninitialized)
+    .unwrap_or_exit("Tried to access database before initialization")
+});
 
-static DATABASE: Lazy<Mutex<Database>> = Lazy::new(|| Mutex::new(Database::load()));
+pub async fn init() {
+  let client_options = ClientOptions::parse_with_resolver_config(
+    env_var("MONGODB_URI").unwrap_or_exit("Could not find MongoDB URI"),
+    ResolverConfig::cloudflare(),
+  )
+  .await
+  .unwrap_or_exit("Could not parse MongoDB URI");
+
+  let client =
+    Client::with_options(client_options).unwrap_or_exit("Could not initialize MongoDB client");
+
+  DATABASE_RESULT
+    .set(Database(client.database("playground")))
+    .map_err(DBError::AlreadyInitialized)
+    .unwrap_or_exit("Database was initialized more than once");
+  log!(info@"Database Initialized");
+}
 
 pub async fn save_user(provider: Provider) -> DBResult<String> {
   let user: User = provider.clone().into();
   let token = jwt::sign_token(&user)?;
-  let mut database = DATABASE.lock().await;
-  database.users.insert(user._id.clone(), user);
-  database.providers.insert(provider._id.clone(), provider);
-  database.save()?;
+  DATABASE
+    .insert_doc(&Collection::Users, &user._id, &user)
+    .await?;
+  DATABASE
+    .insert_doc(&Collection::Providers, &provider._id, &provider)
+    .await?;
   Ok(token)
 }
 
 pub async fn add_provider_to_user(mut user: User, provider: Provider) -> DBResult<String> {
-  let mut database = DATABASE.lock().await;
-  let provider_id = provider._id.clone();
-  database.providers.insert(provider_id.clone(), provider);
-  user.linked_accounts.insert(provider_id);
+  DATABASE
+    .insert_doc(&Collection::Providers, &provider._id, &provider)
+    .await?;
+  user.linked_accounts.insert(provider._id);
   let token = jwt::sign_token(&user)?;
-  database.users.insert(user._id.clone(), user);
-  database.save()?;
+  DATABASE
+    .insert_doc(&Collection::Users, &user._id, &user)
+    .await?;
   Ok(token)
 }
 
-pub async fn update_provider_token(id: &str, mut token: Token) -> DBResult {
-  let mut database = DATABASE.lock().await;
-  if let Some(provider) = database.providers.get_mut(id) {
-    token.refresh_token = token.refresh_token.or(provider.token.refresh_token.clone());
-    provider.token = token;
-    database.save()?;
+pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
+  let providers = DATABASE.collection(&Collection::Providers);
+  let mut update = doc! {
+    "token.access_token": token.access_token,
+    "token.expires_seconds": token.expires_seconds as f32,
+  };
+  if let Some(refresh_token) = token.refresh_token {
+    update.insert("refresh_token", refresh_token);
   }
+  providers
+    .find_one_and_update(doc! { "_id": id }, doc! { "$set": update }, None)
+    .await?;
   Ok(())
 }
 
 pub async fn get_provider_by_id(id: &str) -> Option<Provider> {
-  let database = DATABASE.lock().await;
-  database.providers.get(id).cloned()
+  DATABASE
+    .collection(&Collection::Providers)
+    .find_one(doc! { "_id": id }, None)
+    .await
+    .ok()
+    .flatten()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Database {
-  users: HashMap<String, User>,
-  providers: HashMap<String, Provider>,
+#[derive(Debug)]
+enum Collection {
+  Providers,
+  Users,
 }
+
+impl std::fmt::Display for Collection {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", format!("{:?}", self).to_lowercase())
+  }
+}
+
+#[derive(Debug)]
+pub struct Database(mongodb::Database);
 
 impl Database {
-  fn load() -> Self {
-    match fs::read(DATABASE_PATH) {
-      Ok(data) => {
-        Ok(serde_json::from_slice(&data[..]).unwrap_or_exit("Failed to parse database file"))
-      }
-      Err(err) => match err.kind() {
-        std::io::ErrorKind::NotFound => {
-          fs::File::create(DATABASE_PATH).unwrap_or_exit("Failed to create database file");
-          let database: Self = serde_json::from_str(r#"{"users":{},"providers":{}}"#)
-            .unwrap_or_exit("Failed to initialize database data");
-          database
-            .save()
-            .unwrap_or_exit("Failed to create database file");
-          Ok(database)
-        }
-        _ => Err(err),
-      },
-    }
-    .unwrap_or_exit("Failed to read database file")
+  /// Update doc in collection or create it if it doesn't exist.
+  async fn insert_doc<T: Serialize>(&self, collection: &Collection, id: &str, doc: &T) -> DBResult {
+    let collection = self.0.collection::<T>(&collection.to_string());
+    let upsert = ReplaceOptions::builder().upsert(true).build();
+    collection
+      .replace_one(doc! { "_id": id }, doc, upsert)
+      .await?;
+    Ok(())
   }
 
-  fn save(&self) -> DBResult {
-    fs::write(
-      DATABASE_PATH,
-      serde_json::to_string(self).map_err(DBError::from)?,
-    )
-    .map_err(DBError::from)?;
-    Ok(())
+  fn collection(&self, collection: &Collection) -> mongodb::Collection<Provider> {
+    self.0.collection(&collection.to_string())
   }
 }
 
@@ -149,11 +180,13 @@ impl Provider {
 #[derive(Error, Debug)]
 pub enum DBError {
   #[error(transparent)]
+  InternalDatabase(#[from] mongodb::error::Error),
+  #[error("Database has not been initialized")]
+  Uninitialized,
+  #[error("Database has already been initialized as {0:?}")]
+  AlreadyInitialized(Database),
+  #[error(transparent)]
   JWT(#[from] JWTError),
-  #[error("Database I/O error")]
-  IO(#[from] std::io::Error),
-  #[error("Database parsing error")]
-  Parsing(#[from] serde_json::Error),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;

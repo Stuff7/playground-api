@@ -57,3 +57,17 @@ pub trait Colorize {
 
 impl Colorize for String {}
 impl<'a> Colorize for &'a str {}
+
+#[macro_export]
+macro_rules! log {
+  ( $fn: ident @ $( $x: expr ),* ) => {
+    {
+      println!("{}", format!($($x),*).$fn());
+    }
+  };
+  ( $( $x: expr ),* ) => {
+    {
+      println!("{}", format!($($x),*).log());
+    }
+  };
+}

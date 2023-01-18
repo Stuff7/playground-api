@@ -6,6 +6,7 @@ use crate::env_var;
 use crate::http::get_range;
 use crate::http::json_response;
 use crate::http::JsonResult;
+use crate::log;
 use crate::AppResult;
 
 use super::jwt::decode_token;
@@ -334,7 +335,7 @@ async fn drive_video(
         .await?;
         match json_response::<GoogleDriveFile>(response).await? {
           JsonResult::Typed(file) => {
-            println!("{}", f!("CACHING FILE METADATA {video_id}").log());
+            log!("CACHING FILE METADATA {video_id}");
             let GoogleDriveFile {
               mime_type, size, ..
             } = file;
@@ -401,7 +402,7 @@ async fn drive_request(
             user_id
           ))
         })?;
-        println!("{}", f!("CACHING TOKEN {}", user_id).log());
+        log!("CACHING TOKEN {user_id}");
         cache.insert(user_id.to_owned(), provider.token.clone());
         provider.token
       }
@@ -420,14 +421,7 @@ async fn drive_request(
 
   // if access token changed after the request, it means it was refreshed
   if access_token != token.access_token {
-    println!(
-      "{}",
-      f!(
-        "ACCESS TOKEN REFRESHED UPDATING DATABASE PROVIDER {:?}",
-        user_id
-      )
-      .log()
-    );
+    log!("ACCESS TOKEN REFRESHED UPDATING DATABASE PROVIDER {user_id:?}");
     TOKEN_CACHE
       .lock()
       .await

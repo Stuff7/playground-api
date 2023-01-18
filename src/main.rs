@@ -16,6 +16,7 @@ use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
+  db::init().await;
   let google_api = auth::google::api().unwrap_or_exit("Could not initialize Google API");
   let cors = CorsLayer::new()
     .allow_methods(tower_http::cors::Any)
@@ -37,7 +38,7 @@ async fn main() {
     .parse()
     .unwrap_or_exit("Failed to parse socket address");
 
-  println!("{}", f!("listening on {}", socket_address).success());
+  log!(success@"listening on {socket_address}");
 
   axum::Server::bind(&socket_address)
     .serve(app.into_make_service())
@@ -73,7 +74,7 @@ async fn shutdown_signal() {
     _ = terminate => {},
   }
 
-  println!("{}", "Signal received, starting graceful shutdown".info());
+  log!(info@"Signal received, starting graceful shutdown");
 }
 
 trait GracefulExit<T> {
@@ -88,7 +89,7 @@ where
     match self {
       Ok(t) => t,
       Err(e) => {
-        println!("{}", f!("{msg}: {e}").log());
+        log!("{msg}: {e}");
         std::process::exit(0)
       }
     }
