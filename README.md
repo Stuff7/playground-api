@@ -1,6 +1,6 @@
 # Playground API
 
-As of right now the only feature in this API is to play private videos from google drive and the most simple google oauth system, no database for now all data is persisted in a json file
+As of right now the only feature in this API is to play private videos from google drive using the most simple google oauth system.
 
 ## Required env vars:
 ```
