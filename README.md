@@ -7,6 +7,7 @@ As of right now the only feature in this API is to play private videos from goog
 SOCKET_ADDRESS
 ALLOWED_ORIGINS
 JWT_SECRET
+MONGODB_URI
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URL
