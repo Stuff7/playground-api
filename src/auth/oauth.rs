@@ -17,13 +17,13 @@ type AsyncRequestError = RequestTokenError<
 pub struct Token {
   pub access_token: String,
   pub refresh_token: Option<String>,
-  pub expires_seconds: u64,
+  pub expires_seconds: u32,
 }
 
 impl From<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>> for Token {
   fn from(token: StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Self {
     Self {
-      expires_seconds: token.expires_in().unwrap_or_default().as_secs(),
+      expires_seconds: token.expires_in().unwrap_or_default().as_secs() as u32,
       access_token: token.access_token().secret().clone(),
       refresh_token: token
         .refresh_token()

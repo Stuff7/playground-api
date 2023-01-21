@@ -9,7 +9,7 @@ use crate::{
 
 use mongodb::{
   bson::doc,
-  options::{ClientOptions, ReplaceOptions, ResolverConfig},
+  options::{ClientOptions, ReplaceOptions, ResolverConfig, UpdateOptions},
   Client,
 };
 use once_cell::sync::{Lazy, OnceCell};
@@ -50,22 +50,22 @@ pub async fn save_user(provider: Provider) -> DBResult<String> {
   let user: User = provider.clone().into();
   let token = jwt::sign_token(&user)?;
   DATABASE
-    .insert_doc(&Collection::Users, &user._id, &user)
+    .create(&Collection::Users, &user._id, &user)
     .await?;
   DATABASE
-    .insert_doc(&Collection::Providers, &provider._id, &provider)
+    .replace(&Collection::Providers, &provider._id, &provider)
     .await?;
   Ok(token)
 }
 
 pub async fn add_provider_to_user(mut user: User, provider: Provider) -> DBResult<String> {
   DATABASE
-    .insert_doc(&Collection::Providers, &provider._id, &provider)
+    .replace(&Collection::Providers, &provider._id, &provider)
     .await?;
   user.linked_accounts.insert(provider._id);
   let token = jwt::sign_token(&user)?;
   DATABASE
-    .insert_doc(&Collection::Users, &user._id, &user)
+    .replace(&Collection::Users, &user._id, &user)
     .await?;
   Ok(token)
 }
@@ -74,7 +74,7 @@ pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
   let providers = DATABASE.collection(&Collection::Providers);
   let mut update = doc! {
     "token.access_token": token.access_token,
-    "token.expires_seconds": token.expires_seconds as f32,
+    "token.expires_seconds": token.expires_seconds,
   };
   if let Some(refresh_token) = token.refresh_token {
     update.insert("token.refresh_token", refresh_token);
@@ -90,6 +90,10 @@ pub async fn get_provider_by_id(id: &str) -> Option<Provider> {
     .collection(&Collection::Providers)
     .find_one(doc! { "_id": id }, None)
     .await
+    .map_err(|err| {
+      log!(err@"An error occurred in get_provider_by_id: {err}");
+      err
+    })
     .ok()
     .flatten()
 }
@@ -110,12 +114,27 @@ impl std::fmt::Display for Collection {
 pub struct Database(mongodb::Database);
 
 impl Database {
-  /// Update doc in collection or create it if it doesn't exist.
-  async fn insert_doc<T: Serialize>(&self, collection: &Collection, id: &str, doc: &T) -> DBResult {
+  /// Replace doc in collection or create it if it doesn't exist.
+  async fn replace<T: Serialize>(&self, collection: &Collection, id: &str, doc: &T) -> DBResult {
     let collection = self.0.collection::<T>(&collection.to_string());
     let upsert = ReplaceOptions::builder().upsert(true).build();
     collection
       .replace_one(doc! { "_id": id }, doc, upsert)
+      .await?;
+    Ok(())
+  }
+
+  /// Insert doc only if it doesn't exist.
+  async fn create<T: Serialize + Into<mongodb::bson::Bson> + std::clone::Clone>(
+    &self,
+    collection: &Collection,
+    id: &str,
+    doc: &T,
+  ) -> DBResult {
+    let collection = self.0.collection::<T>(&collection.to_string());
+    let upsert = UpdateOptions::builder().upsert(true).build();
+    collection
+      .update_one(doc! { "_id": id }, doc! { "$setOnInsert": doc }, upsert)
       .await?;
     Ok(())
   }
@@ -131,6 +150,17 @@ pub struct User {
   pub picture: String,
   pub linked_accounts: HashSet<String>,
   pub exp: usize,
+}
+
+impl From<User> for mongodb::bson::Bson {
+  fn from(user: User) -> Self {
+    mongodb::bson::Bson::Document(doc! {
+      "_id": user._id,
+      "picture": user.picture,
+      "linked_accounts": Vec::from_iter(user.linked_accounts),
+      "exp": user.exp as u32,
+    })
+  }
 }
 
 impl User {
@@ -163,7 +193,7 @@ impl Provider {
     picture: String,
     access_token: String,
     refresh_token: Option<String>,
-    expires_seconds: u64,
+    expires_seconds: u32,
   ) -> Self {
     Self {
       _id,
