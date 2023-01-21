@@ -2,9 +2,10 @@ use std::fmt::Debug;
 
 use crate::GracefulExit;
 
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum JWTError {
@@ -35,10 +36,31 @@ static KEYS: Lazy<Keys> = Lazy::new(|| {
   Keys::new(secret.as_bytes())
 });
 
-pub fn sign_token<T: Serialize + Debug>(data: &T) -> JWTResult<String> {
-  encode(&Header::default(), data, &KEYS.encoding).map_err(|err| JWTError::Signing(err))
+pub fn sign_token(sub: &str) -> JWTResult<String> {
+  encode(
+    &Header::default(),
+    &Claims {
+      sub: sub.to_string(),
+      exp: expires_in(3600).timestamp() as usize,
+    },
+    &KEYS.encoding,
+  )
+  .map_err(|err| JWTError::Signing(err))
 }
 
-pub fn decode_token<T: serde::de::DeserializeOwned>(token: &str) -> JWTResult<TokenData<T>> {
-  decode::<T>(token, &KEYS.decoding, &Validation::default()).map_err(JWTError::from)
+pub fn verify_token(token: &str) -> JWTResult<TokenData<Claims>> {
+  decode(token, &KEYS.decoding, &Validation::default()).map_err(JWTError::from)
+}
+
+fn expires_in(seconds: usize) -> chrono::DateTime<Utc> {
+  let mut now = Utc::now();
+  let expires_in = Duration::seconds(seconds as i64);
+  now += expires_in;
+  now
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+  pub sub: String,
+  exp: usize,
 }

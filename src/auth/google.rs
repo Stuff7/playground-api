@@ -9,16 +9,14 @@ use crate::http::JsonResult;
 use crate::log;
 use crate::AppResult;
 
-use super::jwt::decode_token;
 use super::oauth::Token;
+use super::session::Session;
 use super::AuthQuery;
 use super::AuthenticateQuery;
 use super::AuthorizedQuery;
+use super::Cache;
 use super::UserIDQuery;
 
-use axum::headers::authorization::Bearer;
-use axum::headers::Authorization;
-use axum::TypedHeader;
 use format as f;
 
 use std::collections::HashMap;
@@ -49,8 +47,6 @@ impl FromRef<AppState> for BasicClient {
     state.oauth_client.clone()
   }
 }
-
-type Cache<T> = Lazy<Mutex<HashMap<String, T>>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct FileCache {
@@ -160,21 +156,24 @@ async fn login_authorized(
   );
 
   // Check if provider authentication was done by a logged in user
-  let logged_in_user: Option<db::User> =
-    OAUTH_CACHE
-      .lock()
-      .await
-      .remove(&query.state)
-      .and_then(|current_token| {
-        decode_token(&current_token)
-          .ok()
-          .and_then(|token| token.claims)
-      });
+  let logged_in_user = match OAUTH_CACHE.lock().await.remove(&query.state) {
+    Some(token) => match Session::from_token(&token).await {
+      Ok(session) => {
+        let user = session.get_user().await.ok();
+        Session::invalidate(&token).await;
+        user
+      }
+      Err(_) => None,
+    },
+    None => None,
+  };
 
   let token = match logged_in_user {
     Some(user) => db::add_provider_to_user(user, provider).await?,
     None => db::save_user(provider).await?,
   };
+
+  Session::save(&token).await;
 
   Ok(Json(APITokenResponse { token }))
 }
@@ -225,13 +224,13 @@ struct GoogleDriveFilesResponse {
 /// Get all drive files from specific google account.
 async fn request_drive_files(
   client: &BasicClient,
-  token: &str,
+  user: &db::User,
   user_id: &str,
 ) -> APIResult<GoogleDriveFilesResponse> {
   let response = drive_request(
     &client,
-    token,
-    &user_id,
+    user,
+    user_id,
     Request::Endpoint(&f!(
       "files?fields=files({FILE_FIELDS})&trashed=false&orderBy=quotaBytesUsed desc"
     )),
@@ -247,23 +246,20 @@ type DriveFilesResponse = HashMap<String, Vec<GoogleDriveFile>>;
 
 /// List all drive files for single google account or all user linked accounts if user is not passed in.
 async fn drive_files(
-  TypedHeader(bearer): TypedHeader<Authorization<Bearer>>,
   Query(query): Query<UserIDQuery>,
   State(client): State<BasicClient>,
+  session: Session,
 ) -> APIResult<Json<DriveFilesResponse>> {
   let mut files_response: DriveFilesResponse = HashMap::new();
+  let user = session.get_user().await?;
   match query.user {
     Some(user_id) => {
-      let files = request_drive_files(&client, bearer.token(), &user_id)
-        .await?
-        .files;
+      let files = request_drive_files(&client, &user, &user_id).await?.files;
       files_response.insert(user_id, files);
     }
     None => {
-      let token = bearer.token();
-      let user: db::User = decode_token(token)?.claims;
-      for user_id in user.linked_accounts {
-        let files = request_drive_files(&client, token, &user_id).await?.files;
+      for user_id in user.linked_accounts.clone() {
+        let files = request_drive_files(&client, &user, &user_id).await?.files;
         files_response.insert(user_id, files);
       }
     }
@@ -271,29 +267,18 @@ async fn drive_files(
   Ok(Json(files_response))
 }
 
-fn get_user_id(token: &str, user_id: Option<String>) -> APIResult<String> {
-  let user_id = match user_id {
-    Some(id) => id.to_string(),
-    None => {
-      let user: db::User = decode_token(token)?.claims;
-      user._id
-    }
-  };
-  Ok(user_id)
-}
-
 /// Get drive file from specific google account or current user if user query param is not passed in.
 async fn drive_file(
-  TypedHeader(bearer): TypedHeader<Authorization<Bearer>>,
   Query(query): Query<UserIDQuery>,
   Path(file_id): Path<String>,
   State(client): State<BasicClient>,
+  session: Session,
 ) -> APIResult<Json<GoogleDriveFile>> {
-  let token = bearer.token();
+  let user = session.get_user().await?;
   let response = drive_request(
     &client,
-    token,
-    &get_user_id(token, query.user)?,
+    &user,
+    &query.user.unwrap_or_else(|| user._id.clone()),
     Request::Endpoint(&f!("files/{file_id}?fields={FILE_FIELDS}&trashed=false")),
   )
   .await?;
@@ -318,8 +303,9 @@ async fn drive_video(
     ))
     .header("Range", f!("bytes={byte_range}"));
 
-  let user_id = &get_user_id(&query.token, query.user)?;
-  let response = drive_request(&client, &query.token, user_id, Request::Builder(builder)).await?;
+  let user = Session::from_token(&query.token).await?.get_user().await?;
+  let user_id = &query.user.unwrap_or_else(|| user._id.clone());
+  let response = drive_request(&client, &user, user_id, Request::Builder(builder)).await?;
 
   let (content_length, content_type) = {
     let mut cache = FILE_CACHE.lock().await;
@@ -328,7 +314,7 @@ async fn drive_video(
       None => {
         let response = drive_request(
           &client,
-          &query.token,
+          &user,
           user_id,
           Request::Endpoint(&f!("files/{video_id}?fields={FILE_FIELDS}&trashed=false")),
         )
@@ -374,15 +360,13 @@ enum Request<T: std::fmt::Display> {
 /// Request auth protected drive API stuff.
 async fn drive_request(
   client: &BasicClient,
-  token: &str,
+  user: &db::User,
   user_id: &str,
   request: Request<&str>,
 ) -> APIResult<reqwest::Response> {
-  let user = decode_token::<db::User>(token)?.claims;
-
   if !user.linked_accounts.contains(user_id) {
     return Err(
-      APIError::Unauthorized(f!(
+      APIError::UnauthorizedMessage(f!(
         "user with id {:?} is not authorized to see {:?}",
         user._id,
         user_id
@@ -396,12 +380,14 @@ async fn drive_request(
     match cache.get(user_id).cloned() {
       Some(token) => token,
       None => {
-        let provider = db::get_provider_by_id(user_id).await.ok_or_else(|| {
-          APIError::Unauthorized(f!(
-            "Could not find provider {:?}. Try logging in with your google account",
-            user_id
-          ))
-        })?;
+        let provider = db::get_by_id::<db::Provider>(user_id)
+          .await
+          .ok_or_else(|| {
+            APIError::UnauthorizedMessage(f!(
+              "Could not find provider {:?}. Try logging in with your google account",
+              user_id
+            ))
+          })?;
         log!("CACHING TOKEN {user_id}");
         cache.insert(user_id.to_owned(), provider.token.clone());
         provider.token
