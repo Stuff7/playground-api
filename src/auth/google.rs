@@ -40,11 +40,18 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 struct AppState {
   oauth_client: BasicClient,
+  login_redirect: String,
 }
 
 impl FromRef<AppState> for BasicClient {
   fn from_ref(state: &AppState) -> Self {
     state.oauth_client.clone()
+  }
+}
+
+impl FromRef<AppState> for String {
+  fn from_ref(state: &AppState) -> Self {
+    state.login_redirect.clone()
   }
 }
 
@@ -62,7 +69,12 @@ static OAUTH_CACHE: Cache<String> = Lazy::new(|| Mutex::new(HashMap::new()));
 /// Setup API endpoints for google services.
 pub fn api() -> AppResult<Router> {
   let oauth_client = oauth_client()?;
-  let app_state = AppState { oauth_client };
+  let login_redirect = env_var("LOGIN_REDIRECT")?;
+
+  let app_state = AppState {
+    oauth_client,
+    login_redirect,
+  };
 
   Ok(
     Router::new()
@@ -133,7 +145,8 @@ struct APITokenResponse {
 async fn login_authorized(
   Query(query): Query<AuthorizedQuery>,
   State(client): State<BasicClient>,
-) -> APIResult<Json<APITokenResponse>> {
+  State(login_redirect): State<String>,
+) -> APIResult<Redirect> {
   let token = Token::exchange(&client, query.code).await?;
 
   let profile = google_user_info(&token.access_token).await?;
@@ -175,7 +188,7 @@ async fn login_authorized(
 
   Session::save(&token).await;
 
-  Ok(Json(APITokenResponse { token }))
+  Ok(Redirect::to(&f!("{login_redirect}?access_token={token}")))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

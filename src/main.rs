@@ -4,11 +4,18 @@ mod console;
 mod db;
 mod http;
 
+use auth::session::Session;
 use console::Colorize;
 
 use format as f;
 
-use axum::{http::HeaderValue, Router};
+use axum::{
+  headers::{authorization::Bearer, Authorization},
+  http::HeaderValue,
+  routing::delete,
+  Router, TypedHeader,
+};
+use reqwest::StatusCode;
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::signal;
@@ -31,7 +38,10 @@ async fn main() {
   } else {
     cors
   };
-  let app = Router::new().nest("/api/google", google_api).layer(cors);
+  let app = Router::new()
+    .route("/logout", delete(logout))
+    .nest("/api/google", google_api)
+    .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")
     .unwrap_or_exit("Socket address is missing")
@@ -45,6 +55,11 @@ async fn main() {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap_or_exit("Failed to start server");
+}
+
+async fn logout(TypedHeader(bearer): TypedHeader<Authorization<Bearer>>) -> StatusCode {
+  Session::invalidate(bearer.token()).await;
+  StatusCode::NO_CONTENT
 }
 
 pub fn env_var(var_name: &str) -> AppResult<String> {
