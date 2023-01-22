@@ -2,6 +2,7 @@ use crate::api::APIError;
 use crate::api::APIResult;
 use crate::console::Colorize;
 use crate::db;
+use crate::db::Cache;
 use crate::env_var;
 use crate::http::get_range;
 use crate::http::json_response;
@@ -14,7 +15,6 @@ use super::session::Session;
 use super::AuthQuery;
 use super::AuthenticateQuery;
 use super::AuthorizedQuery;
-use super::Cache;
 use super::UserIDQuery;
 
 use format as f;
@@ -192,7 +192,7 @@ async fn google_user_info(access_token: &str) -> APIResult<GoogleUserInfo> {
 
   match json_response::<GoogleUserInfo>(response).await? {
     JsonResult::Typed(profile) => Ok(profile),
-    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file).into()),
+    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file)),
   }
 }
 
@@ -238,7 +238,7 @@ async fn request_drive_files(
   .await?;
   return match json_response::<GoogleDriveFilesResponse>(response).await? {
     JsonResult::Typed(file) => Ok(file),
-    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file).into()),
+    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file)),
   };
 }
 
@@ -284,7 +284,7 @@ async fn drive_file(
   .await?;
   match json_response::<GoogleDriveFile>(response).await? {
     JsonResult::Typed(file) => Ok(Json(file)),
-    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file).into()),
+    JsonResult::Untyped(file) => Err(APIError::JsonParsing(file)),
   }
 }
 
@@ -334,7 +334,7 @@ async fn drive_video(
             );
             (size.unwrap_or_default(), mime_type)
           }
-          JsonResult::Untyped(file) => return Err(APIError::JsonParsing(file).into()),
+          JsonResult::Untyped(file) => return Err(APIError::JsonParsing(file)),
         }
       }
     }
@@ -365,14 +365,11 @@ async fn drive_request(
   request: Request<&str>,
 ) -> APIResult<reqwest::Response> {
   if !user.linked_accounts.contains(user_id) {
-    return Err(
-      APIError::UnauthorizedMessage(f!(
-        "user with id {:?} is not authorized to see {:?}",
-        user._id,
-        user_id
-      ))
-      .into(),
-    );
+    return Err(APIError::UnauthorizedMessage(f!(
+      "user with id {:?} is not authorized to see {:?}",
+      user._id,
+      user_id
+    )));
   }
 
   let mut token = {

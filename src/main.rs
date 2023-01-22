@@ -75,6 +75,8 @@ async fn shutdown_signal() {
   }
 
   log!(info@"Signal received, starting graceful shutdown");
+  db::save_sessions().await;
+  log!(success@"Graceful shutdown done!");
 }
 
 trait GracefulExit<T> {

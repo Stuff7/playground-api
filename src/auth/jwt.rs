@@ -41,7 +41,7 @@ pub fn sign_token(sub: &str) -> JWTResult<String> {
     &Header::default(),
     &Claims {
       sub: sub.to_string(),
-      exp: expires_in(3600).timestamp() as usize,
+      exp: expires_in(Duration::weeks(2)).timestamp() as usize,
     },
     &KEYS.encoding,
   )
@@ -52,11 +52,8 @@ pub fn verify_token(token: &str) -> JWTResult<TokenData<Claims>> {
   decode(token, &KEYS.decoding, &Validation::default()).map_err(JWTError::from)
 }
 
-fn expires_in(seconds: usize) -> chrono::DateTime<Utc> {
-  let mut now = Utc::now();
-  let expires_in = Duration::seconds(seconds as i64);
-  now += expires_in;
-  now
+fn expires_in(duration: Duration) -> chrono::DateTime<Utc> {
+  Utc::now() + duration
 }
 
 #[derive(Debug, Serialize, Deserialize)]

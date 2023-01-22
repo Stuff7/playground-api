@@ -10,14 +10,9 @@ use axum::{
   http::request::Parts,
   RequestPartsExt,
 };
-use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::collections::HashSet;
-use tokio::sync::Mutex;
 
 use super::jwt;
-
-static SESSION_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Serialize)]
 pub struct Session {
@@ -34,20 +29,23 @@ impl Session {
   }
 
   pub async fn save(token: &str) {
-    SESSION_CACHE.lock().await.insert(token.to_string());
+    db::SESSIONS_CACHE.lock().await.insert(token.to_string());
   }
 
   pub async fn invalidate(token: &str) {
-    SESSION_CACHE.lock().await.remove(token);
+    db::SESSIONS_CACHE.lock().await.remove(token);
   }
 
   pub async fn from_token(token: &str) -> APIResult<Self> {
-    let cache = SESSION_CACHE.lock().await;
+    let mut cache = db::SESSIONS_CACHE.lock().await;
     let user_id = cache
       .contains(token)
       .then(|| jwt::verify_token(&token).and_then(|token| Ok(token.claims.sub)))
-      .ok_or_else(|| APIError::UnauthorizedMessage("Invalid session".to_string()))??;
-
+      .ok_or_else(|| APIError::UnauthorizedMessage("Invalid session".to_string()))?
+      .or_else(|err| {
+        cache.remove(token);
+        Err(APIError::from(err))
+      })?;
     Ok(Self { user_id })
   }
 }

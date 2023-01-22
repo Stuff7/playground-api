@@ -1,8 +1,11 @@
+mod models;
+
+pub use models::*;
+
 use crate::{
   auth::{
     jwt::{self, JWTError},
     oauth::Token,
-    Cache,
   },
   console::Colorize,
   env_var, log, GracefulExit,
@@ -14,11 +17,7 @@ use mongodb::{
   Client,
 };
 use once_cell::sync::{Lazy, OnceCell};
-use std::collections::{HashMap, HashSet};
 use thiserror::Error;
-use tokio::sync::Mutex;
-
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 // First we load the database within the main async runtime
 static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
@@ -29,9 +28,6 @@ static DATABASE: Lazy<&Database> = Lazy::new(|| {
     .ok_or_else(|| DBError::Uninitialized)
     .unwrap_or_exit("Tried to access database before initialization")
 });
-
-pub static USERS_CACHE: Cache<User> = Lazy::new(|| Mutex::new(HashMap::new()));
-pub static PROVIDERS_CACHE: Cache<Provider> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub async fn init() {
   let client_options = ClientOptions::parse_with_resolver_config(
@@ -49,6 +45,38 @@ pub async fn init() {
     .map_err(DBError::AlreadyInitialized)
     .unwrap_or_exit("Database was initialized more than once");
   log!(info@"Database Initialized");
+  load_sessions().await;
+}
+
+async fn load_sessions() {
+  log!(info@"Loading sessions");
+  let session = DATABASE
+    .0
+    .collection::<SessionCache>("sessions")
+    .find_one(doc! { "_id": "sessions" }, None)
+    .await
+    .ok()
+    .flatten();
+  if let Some(session) = session {
+    let sessions = session.sessions;
+    SESSIONS_CACHE.lock().await.extend(sessions);
+  }
+}
+
+pub async fn save_sessions() {
+  log!(info@"Saving sessions");
+  let upsert = UpdateOptions::builder().upsert(true).build();
+  let sessions = SESSIONS_CACHE.lock().await;
+  DATABASE
+    .0
+    .collection::<SessionCache>("sessions")
+    .update_one(
+      doc! { "_id": "sessions" },
+      doc! { "$set": { "sessions": sessions.iter().collect::<Vec<_>>() } },
+      upsert,
+    )
+    .await
+    .unwrap_or_exit("Could not save sessions to database");
 }
 
 pub async fn save_user(provider: Provider) -> DBResult<String> {
@@ -100,23 +128,13 @@ pub async fn get_by_id<T: Collection>(id: &str) -> Option<T> {
     .flatten()
 }
 
-pub trait Collection:
-  std::fmt::Debug + Serialize + DeserializeOwned + Unpin + Send + Sync + Clone + 'static
-{
-  fn collection_name() -> &'static str;
-  fn id(&self) -> &str;
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized;
-}
-
 #[derive(Debug)]
 pub struct Database(mongodb::Database);
 
 impl Database {
   /// Replace doc in collection or create it if it doesn't exist.
   async fn replace<T: Collection>(&self, doc: &T) -> DBResult {
-    let collection = self.0.collection::<T>(T::collection_name());
+    let collection = self.collection::<T>();
     let upsert = ReplaceOptions::builder().upsert(true).build();
     collection
       .replace_one(doc! { "_id": doc.id() }, doc, upsert)
@@ -131,7 +149,7 @@ impl Database {
 
   /// Insert doc only if it doesn't exist.
   async fn create<T: Collection + Into<Bson>>(&self, doc: &T) -> DBResult {
-    let collection = self.0.collection::<T>(T::collection_name());
+    let collection = self.collection::<T>();
     let upsert = UpdateOptions::builder().upsert(true).build();
     let result = collection
       .update_one(
@@ -163,96 +181,6 @@ impl Database {
 
   fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
     self.0.collection(T::collection_name())
-  }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct User {
-  pub _id: String,
-  pub picture: String,
-  pub linked_accounts: HashSet<String>,
-}
-
-impl Collection for User {
-  fn collection_name() -> &'static str {
-    "users"
-  }
-  fn id(&self) -> &str {
-    &self._id
-  }
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized,
-  {
-    &USERS_CACHE
-  }
-}
-
-impl From<User> for Bson {
-  fn from(user: User) -> Self {
-    Bson::Document(doc! {
-      "_id": user._id,
-      "picture": user.picture,
-      "linked_accounts": Vec::from_iter(user.linked_accounts),
-    })
-  }
-}
-
-impl User {
-  pub fn new(provider_id: String, picture: String) -> Self {
-    Self {
-      _id: provider_id.clone(),
-      picture,
-      linked_accounts: HashSet::from([provider_id]),
-    }
-  }
-}
-
-impl From<Provider> for User {
-  fn from(provider: Provider) -> Self {
-    Self::new(provider._id, provider.picture)
-  }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Provider {
-  pub _id: String,
-  pub picture: String,
-  pub token: Token,
-}
-
-impl Collection for Provider {
-  fn collection_name() -> &'static str {
-    "providers"
-  }
-  fn id(&self) -> &str {
-    &self._id
-  }
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized,
-  {
-    &PROVIDERS_CACHE
-  }
-}
-
-impl Provider {
-  pub fn new(
-    _id: String,
-    picture: String,
-    access_token: String,
-    refresh_token: Option<String>,
-    expires_seconds: u32,
-  ) -> Self {
-    Self {
-      _id,
-      picture,
-      token: Token {
-        access_token,
-        refresh_token,
-        expires_seconds,
-      },
-    }
   }
 }
 
