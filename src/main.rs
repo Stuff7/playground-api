@@ -3,6 +3,7 @@ mod auth;
 mod console;
 mod db;
 mod http;
+mod routes;
 
 use auth::session::Session;
 use console::Colorize;
@@ -41,6 +42,7 @@ async fn main() {
   let app = Router::new()
     .route("/logout", delete(logout))
     .nest("/api/google", google_api)
+    .nest("/api/users", routes::users::api())
     .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")

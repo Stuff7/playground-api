@@ -22,7 +22,7 @@ pub struct Session {
 impl Session {
   pub async fn get_user(&self) -> APIResult<db::User> {
     Ok(
-      db::get_by_id::<db::User>(&self.user_id.as_ref())
+      db::find_by_id::<db::User>(&self.user_id.as_ref())
         .await
         .ok_or_else(|| APIError::Unauthorized)?,
     )

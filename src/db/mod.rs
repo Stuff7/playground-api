@@ -12,8 +12,11 @@ use crate::{
 };
 
 use mongodb::{
-  bson::{doc, Bson},
-  options::{ClientOptions, ReplaceOptions, ResolverConfig, UpdateOptions},
+  bson::{doc, Bson, Document},
+  options::{
+    ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig, ReturnDocument,
+    UpdateOptions,
+  },
   Client,
 };
 use once_cell::sync::{Lazy, OnceCell};
@@ -96,7 +99,6 @@ pub async fn add_provider_to_user(mut user: User, provider: Provider) -> DBResul
 }
 
 pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
-  let providers = DATABASE.collection::<Provider>();
   let mut update = doc! {
     "token.access_token": token.access_token,
     "token.expires_seconds": token.expires_seconds,
@@ -104,24 +106,16 @@ pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
   if let Some(refresh_token) = token.refresh_token {
     update.insert("token.refresh_token", refresh_token);
   }
-  providers
-    .find_one_and_update(doc! { "_id": id }, doc! { "$set": update }, None)
-    .await?;
+  DATABASE.update_by_id::<Provider>(id, update).await?;
   Ok(())
 }
 
-pub async fn get_by_id<T: Collection>(id: &str) -> Option<T> {
-  let cache = T::cache().lock().await.get(id).cloned();
-  if cache.is_some() {
-    log!("Cache hit {cache:?}\n");
-    return cache;
-  }
+pub async fn find_by_id<T: Collection>(id: &str) -> Option<T> {
   DATABASE
-    .collection::<T>()
-    .find_one(doc! { "_id": id }, None)
+    .find_by_id::<T>(id)
     .await
     .map_err(|err| {
-      log!(err@"An error occurred in get_by_id: {err}");
+      log!(err@"An error occurred in find_by_id: {err}");
       err
     })
     .ok()
@@ -132,6 +126,36 @@ pub async fn get_by_id<T: Collection>(id: &str) -> Option<T> {
 pub struct Database(mongodb::Database);
 
 impl Database {
+  async fn find_by_id<T: Collection>(&self, id: &str) -> DBResult<Option<T>> {
+    let mut cache = T::cache().lock().await;
+    if let Some(doc) = cache.get(id).cloned() {
+      log!("[find] Cache hit {doc:?}\n");
+      return Ok(Some(doc));
+    }
+    let collection = self.collection::<T>();
+    let maybe_doc = collection.find_one(doc! { "_id": id }, None).await?;
+    if let Some(doc) = maybe_doc.clone() {
+      log!("[find] Caching data {doc:?}\n");
+      cache.insert(id.to_string(), doc.clone());
+    }
+    Ok(maybe_doc)
+  }
+
+  async fn update_by_id<T: Collection>(&self, id: &str, update: Document) -> DBResult {
+    let collection = self.collection::<T>();
+    let options = FindOneAndUpdateOptions::builder()
+      .return_document(ReturnDocument::After)
+      .build();
+    let maybe_doc = collection
+      .find_one_and_update(doc! { "_id": id }, doc! { "$set": update }, options)
+      .await?;
+    if let Some(doc) = maybe_doc {
+      log!("[update] Caching data {doc:?}\n");
+      T::cache().lock().await.insert(id.to_string(), doc.clone());
+    }
+    Ok(())
+  }
+
   /// Replace doc in collection or create it if it doesn't exist.
   async fn replace<T: Collection>(&self, doc: &T) -> DBResult {
     let collection = self.collection::<T>();

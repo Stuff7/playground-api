@@ -62,8 +62,8 @@ struct FileCache {
 }
 
 const FILE_FIELDS: &str = "id,name,kind,size,videoMediaMetadata,mimeType";
+// To avoid having to request video metadata on every video streaming request.
 static FILE_CACHE: Cache<FileCache> = Lazy::new(|| Mutex::new(HashMap::new()));
-static TOKEN_CACHE: Cache<Token> = Lazy::new(|| Mutex::new(HashMap::new()));
 static OAUTH_CACHE: Cache<String> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Setup API endpoints for google services.
@@ -386,23 +386,15 @@ async fn drive_request(
   }
 
   let mut token = {
-    let mut cache = TOKEN_CACHE.lock().await;
-    match cache.get(user_id).cloned() {
-      Some(token) => token,
-      None => {
-        let provider = db::get_by_id::<db::Provider>(user_id)
-          .await
-          .ok_or_else(|| {
-            APIError::UnauthorizedMessage(f!(
-              "Could not find provider {:?}. Try logging in with your google account",
-              user_id
-            ))
-          })?;
-        log!("CACHING TOKEN {user_id}");
-        cache.insert(user_id.to_owned(), provider.token.clone());
-        provider.token
-      }
-    }
+    let provider = db::find_by_id::<db::Provider>(user_id)
+      .await
+      .ok_or_else(|| {
+        APIError::UnauthorizedMessage(f!(
+          "Could not find provider {:?}. Try logging in with your google account",
+          user_id
+        ))
+      })?;
+    provider.token
   };
 
   let access_token = token.access_token.clone();
@@ -417,11 +409,7 @@ async fn drive_request(
 
   // if access token changed after the request, it means it was refreshed
   if access_token != token.access_token {
-    log!("ACCESS TOKEN REFRESHED UPDATING DATABASE PROVIDER {user_id:?}");
-    TOKEN_CACHE
-      .lock()
-      .await
-      .insert(user_id.to_owned(), token.clone());
+    log!(info@"ACCESS TOKEN REFRESHED UPDATING DATABASE PROVIDER {user_id:?}");
     db::update_provider_token(user_id, token).await?;
   }
 
