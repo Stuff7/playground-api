@@ -14,6 +14,7 @@ type AsyncRequestError = RequestTokenError<
 >;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct Token {
   pub access_token: String,
   pub refresh_token: Option<String>,

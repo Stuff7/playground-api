@@ -15,6 +15,63 @@ MONGODB_URI
 SOCKET_ADDRESS
 ```
 
+# **Models**
+
+<span id="ProviderID">
+
+```typescript
+type ProviderID = `${string}@${string}`;
+```
+
+</span>
+
+<span id="User">
+
+```typescript
+interface User {
+  id: ProviderID,
+  picture: string, // URL to user's profile picture 
+  linkedAccounts: ProviderID[],
+}
+```
+
+</span>
+
+<span id="GoogleDriveKind">
+
+```typescript
+type GoogleDriveKind = `drive#${string}`;
+```
+
+</span>
+
+<span id="GoogleDriveFile">
+
+```typescript
+interface GoogleDriveFile {
+  kind: GoogleDriveKind,
+  id: string,
+  mimeType: string,
+  name: string,
+  size: `${number}`,
+  videoMetadata: {
+    "width": number,
+    "height": number,
+    "durationMillis": `${number}`,
+  },
+}
+```
+
+</span>
+
+<span id="GoogleDriveFilesResponse">
+
+```typescript
+type GoogleDriveFilesResponse = Record<ProviderID, GoogleDriveFile[]>;
+```
+
+</span>
+
 # **Routes**
 
 ## **Log in**
@@ -47,6 +104,34 @@ Redirects back to JSPlayground with the `access_token` as a query parameter
 
 ---
 
+## **Log out**
+
+```
+DELETE /logout
+```
+
+#### **Response**
+
+Invalidates session and returns no content 204
+
+</br>
+
+---
+
+## **Ping**
+
+```
+GET /ping
+```
+
+#### **Response**
+
+PONG
+
+</br>
+
+---
+
 ## **Get current user info**
 
 ```
@@ -55,16 +140,7 @@ GET /api/users/me
 
 #### **Response**
 
-```json
-{
-  "_id": "google@user1",
-  "picture": "profile-pic-url",
-  "linked_accounts": [
-    "google@user1",
-    "google@user2"
-  ]
-}
-```
+The current logged in [`User`](#User).
 
 </br>
 
@@ -87,33 +163,14 @@ GET /api/google/drive/files
     <tr>
       <td>user</td>
       <td>string</td>
-      <td>Get only the files belonging to this provider ID</td>
+      <td>Get only the files belonging to this provider ID.</td>
     </tr>
   </tbody>
 </table>
 
 #### **Response**
 
-```json
-{
-  "google@user1": [
-    {
-      "kind": "drive#file",
-      "id": "some-id",
-      "mime_type": "video/quicktime",
-      "name": "video.MOV",
-      "size": "3355843957",
-      "video_metadata": {
-        "width": 1920,
-        "height": 1080,
-        "duration_millis": "1725298"
-      }
-    },
-    ...
-  ],
-  "google@user2": ...
-}
-```
+[`GoogleDriveFile`](#GoogleDriveFile) for every [`ProviderID`](#ProviderID) requested [`GoogleDriveFilesResponse`](#GoogleDriveFilesResponse).
 
 </br>
 
@@ -143,20 +200,7 @@ GET /api/google/drive/files/:file_id
 
 #### **Response**
 
-```json
-{
-  "kind": "drive#file",
-  "id": "some-id",
-  "mime_type": "video/quicktime",
-  "name": "video.MOV",
-  "size": "3355843957",
-  "video_metadata": {
-    "width": 1920,
-    "height": 1080,
-    "duration_millis": "1725298"
-  }
-}
-```
+The [`GoogleDriveFile`](#GoogleDriveFile) requested .
 
 </br>
 

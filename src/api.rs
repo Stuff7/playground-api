@@ -75,6 +75,7 @@ pub struct APIErrorResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct APIErrorBody {
   status_code: u16,
   error: String,

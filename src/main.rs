@@ -13,7 +13,7 @@ use format as f;
 use axum::{
   headers::{authorization::Bearer, Authorization},
   http::HeaderValue,
-  routing::delete,
+  routing::{delete, get},
   Router, TypedHeader,
 };
 use reqwest::StatusCode;
@@ -41,6 +41,7 @@ async fn main() {
   };
   let app = Router::new()
     .route("/logout", delete(logout))
+    .route("/ping", get(ping))
     .nest("/api/google", google_api)
     .nest("/api/users", routes::users::api())
     .layer(cors);
@@ -62,6 +63,10 @@ async fn main() {
 async fn logout(TypedHeader(bearer): TypedHeader<Authorization<Bearer>>) -> StatusCode {
   Session::invalidate(bearer.token()).await;
   StatusCode::NO_CONTENT
+}
+
+async fn ping<'a>() -> &'a str {
+  "PONG"
 }
 
 pub fn env_var(var_name: &str) -> AppResult<String> {

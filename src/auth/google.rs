@@ -56,6 +56,7 @@ impl FromRef<AppState> for String {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct FileCache {
   size: String,
   mime_type: String,
@@ -210,6 +211,7 @@ async fn google_user_info(access_token: &str) -> APIResult<GoogleUserInfo> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct VideoMetadata {
   width: Option<usize>,
   height: Option<usize>,
@@ -218,6 +220,7 @@ struct VideoMetadata {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
 struct GoogleDriveFile {
   kind: String,
   id: String,

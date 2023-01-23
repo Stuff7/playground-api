@@ -30,6 +30,7 @@ pub struct SessionCache {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all(serialize = "camelCase"))]
 pub struct User {
   pub _id: String,
   pub picture: String,
