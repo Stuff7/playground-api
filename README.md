@@ -29,7 +29,7 @@ type ProviderID = `${string}@${string}`;
 
 ```typescript
 interface User {
-  id: ProviderID,
+  _id: ProviderID,
   picture: string, // URL to user's profile picture 
   linkedAccounts: ProviderID[],
 }
@@ -209,7 +209,7 @@ The [`GoogleDriveFile`](#GoogleDriveFile) requested .
 ## **Stream drive video**
 
 ```
-GET /drive/video/:video_id
+GET /api/google/drive/video/:video_id
 ```
 <table>
   <thead>
