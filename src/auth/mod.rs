@@ -6,7 +6,6 @@ pub mod session;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all(serialize = "camelCase"))]
 struct AuthenticateQuery {
   current_login: Option<String>,
 }

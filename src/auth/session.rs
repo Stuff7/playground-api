@@ -15,7 +15,6 @@ use serde::Serialize;
 use super::jwt;
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all(serialize = "camelCase"))]
 pub struct Session {
   pub user_id: String,
 }

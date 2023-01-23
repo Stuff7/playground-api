@@ -30,8 +30,9 @@ pub struct SessionCache {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all(serialize = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct User {
+  #[serde(rename = "_id")]
   pub _id: String,
   pub picture: String,
   pub linked_accounts: HashSet<String>,
@@ -67,7 +68,7 @@ impl From<User> for Bson {
     Bson::Document(doc! {
       "_id": user._id,
       "picture": user.picture,
-      "linked_accounts": Vec::from_iter(user.linked_accounts),
+      "linkedAccounts": Vec::from_iter(user.linked_accounts),
     })
   }
 }
@@ -79,7 +80,9 @@ impl From<Provider> for User {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Provider {
+  #[serde(rename = "_id")]
   pub _id: String,
   pub picture: String,
   pub token: Token,
