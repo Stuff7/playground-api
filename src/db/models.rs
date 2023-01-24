@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use mongodb::bson::{doc, Bson};
+use mongodb::bson::doc;
 use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -60,16 +60,6 @@ impl Collection for User {
     Self: Sized,
   {
     &USERS_CACHE
-  }
-}
-
-impl From<User> for Bson {
-  fn from(user: User) -> Self {
-    Bson::Document(doc! {
-      "_id": user._id,
-      "picture": user.picture,
-      "linkedAccounts": Vec::from_iter(user.linked_accounts),
-    })
   }
 }
 

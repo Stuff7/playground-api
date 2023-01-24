@@ -12,7 +12,7 @@ use crate::{
 };
 
 use mongodb::{
-  bson::{doc, Bson, Document},
+  bson::{self, doc, to_document, Document},
   options::{
     ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig, ReturnDocument,
     UpdateOptions,
@@ -99,14 +99,15 @@ pub async fn add_provider_to_user(mut user: User, provider: Provider) -> DBResul
 }
 
 pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
-  let mut update = doc! {
-    "token.access_token": token.access_token,
-    "token.expires_seconds": token.expires_seconds,
-  };
-  if let Some(refresh_token) = token.refresh_token {
-    update.insert("token.refresh_token", refresh_token);
+  let mut update = to_document(&token)?;
+  if token.refresh_token.is_none() {
+    if let Some(provider) = DATABASE.find_by_id::<Provider>(id).await? {
+      update.insert("refreshToken", provider.token.refresh_token);
+    }
   }
-  DATABASE.update_by_id::<Provider>(id, update).await?;
+  DATABASE
+    .update_by_id::<Provider>(id, doc! { "token": update })
+    .await?;
   Ok(())
 }
 
@@ -172,13 +173,13 @@ impl Database {
   }
 
   /// Insert doc only if it doesn't exist.
-  async fn create<T: Collection + Into<Bson>>(&self, doc: &T) -> DBResult {
+  async fn create<T: Collection>(&self, doc: &T) -> DBResult {
     let collection = self.collection::<T>();
     let upsert = UpdateOptions::builder().upsert(true).build();
     let result = collection
       .update_one(
         doc! { "_id": doc.id() },
-        doc! { "$setOnInsert": doc },
+        doc! { "$setOnInsert": to_document(&doc)? },
         upsert,
       )
       .await?;
@@ -220,6 +221,8 @@ pub enum DBError {
   JWT(#[from] JWTError),
   #[error("Logical Error: {0}")]
   Logic(String),
+  #[error("Error serializing bson: {0}")]
+  BSON(#[from] bson::ser::Error),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;
