@@ -21,11 +21,9 @@ pub struct Session {
 
 impl Session {
   pub async fn get_user(&self) -> APIResult<db::User> {
-    Ok(
-      db::find_by_id::<db::User>(&self.user_id.as_ref())
-        .await
-        .ok_or_else(|| APIError::Unauthorized)?,
-    )
+    db::find_by_id::<db::User>(self.user_id.as_ref())
+      .await
+      .ok_or(APIError::Unauthorized)
   }
 
   pub async fn save(token: &str) {
@@ -40,11 +38,11 @@ impl Session {
     let mut cache = db::SESSIONS_CACHE.lock().await;
     let user_id = cache
       .contains(token)
-      .then(|| jwt::verify_token(&token).and_then(|token| Ok(token.claims.sub)))
+      .then(|| jwt::verify_token(token).map(|token| token.claims.sub))
       .ok_or_else(|| APIError::UnauthorizedMessage("Invalid session".to_string()))?
-      .or_else(|err| {
+      .map_err(|err| {
         cache.remove(token);
-        Err(APIError::from(err))
+        APIError::from(err)
       })?;
     Ok(Self { user_id })
   }
@@ -64,7 +62,7 @@ where
       .unwrap_or_exit("Could not extract Authorization header");
 
     let access_token = bearer
-      .and_then(|bearer| Some(bearer.token().to_string()))
+      .map(|bearer| bearer.token().to_string())
       .ok_or_else(|| {
         APIError::UnauthorizedMessage("Missing/Invalid Authorization header".to_string())
       })?;

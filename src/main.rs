@@ -31,7 +31,7 @@ async fn main() {
     .allow_headers(tower_http::cors::Any);
   let cors = if let Ok(allowed_origins) = env_var("ALLOWED_ORIGINS") {
     let origins = allowed_origins
-      .split(",")
+      .split(',')
       .map(|origin| origin.parse::<HeaderValue>())
       .collect::<Result<Vec<_>, _>>()
       .unwrap_or_exit(f!("Could not parse allowed origins {allowed_origins:?}"));

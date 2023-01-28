@@ -30,7 +30,8 @@ type ProviderID = `${string}@${string}`;
 ```typescript
 interface User {
   _id: ProviderID,
-  picture: string, // URL to user's profile picture 
+  name: string,
+  picture: string,
   linkedAccounts: ProviderID[],
 }
 ```

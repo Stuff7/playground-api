@@ -28,7 +28,7 @@ static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
 static DATABASE: Lazy<&Database> = Lazy::new(|| {
   DATABASE_RESULT
     .get()
-    .ok_or_else(|| DBError::Uninitialized)
+    .ok_or(DBError::Uninitialized)
     .unwrap_or_exit("Tried to access database before initialization")
 });
 
@@ -82,10 +82,9 @@ pub async fn save_sessions() {
     .unwrap_or_exit("Could not save sessions to database");
 }
 
-pub async fn save_user(provider: Provider) -> DBResult<String> {
-  let user: User = provider.clone().into();
+pub async fn save_user(user: &User, provider: Provider) -> DBResult<String> {
   let token = jwt::sign_token(&user._id)?;
-  DATABASE.create(&user).await?;
+  DATABASE.create(user).await?;
   DATABASE.replace(&provider).await?;
   Ok(token)
 }
@@ -137,7 +136,7 @@ impl Database {
     let maybe_doc = collection.find_one(doc! { "_id": id }, None).await?;
     if let Some(doc) = maybe_doc.clone() {
       log!("[find] Caching data {doc:?}\n");
-      cache.insert(id.to_string(), doc.clone());
+      cache.insert(id.to_string(), doc);
     }
     Ok(maybe_doc)
   }
@@ -218,11 +217,11 @@ pub enum DBError {
   #[error("Database has already been initialized as {0:?}")]
   AlreadyInitialized(Database),
   #[error(transparent)]
-  JWT(#[from] JWTError),
+  Jwt(#[from] JWTError),
   #[error("Logical Error: {0}")]
   Logic(String),
   #[error("Error serializing bson: {0}")]
-  BSON(#[from] bson::ser::Error),
+  Bson(#[from] bson::ser::Error),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;

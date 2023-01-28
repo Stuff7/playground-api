@@ -155,7 +155,7 @@ async fn login_authorized(
       "google@{}",
       profile
         .email
-        .split_once("@")
+        .split_once('@')
         .ok_or_else(|| APIError::Internal(f!(
           "Invalid email from google provider {:?}",
           profile.email
@@ -183,7 +183,13 @@ async fn login_authorized(
 
   let token = match logged_in_user {
     Some(user) => db::add_provider_to_user(user, provider).await?,
-    None => db::save_user(provider).await?,
+    None => {
+      db::save_user(
+        &db::User::new(&provider._id, &profile.name, &provider.picture),
+        provider,
+      )
+      .await?
+    }
   };
 
   Session::save(&token).await;
@@ -194,6 +200,7 @@ async fn login_authorized(
 #[derive(Debug, Serialize, Deserialize)]
 struct GoogleUserInfo {
   email: String,
+  name: String,
   picture: String,
 }
 
@@ -243,7 +250,7 @@ async fn request_drive_files(
   user_id: &str,
 ) -> APIResult<GoogleDriveFilesResponse> {
   let response = drive_request(
-    &client,
+    client,
     user,
     user_id,
     Request::Endpoint(&f!(

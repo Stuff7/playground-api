@@ -31,7 +31,7 @@ pub enum APIError {
   #[error("Unauthorized")]
   Unauthorized,
   #[error(transparent)]
-  JWT(#[from] JWTError),
+  Jwt(#[from] JWTError),
   #[error(transparent)]
   OAuth(#[from] OAuthError),
   #[error(transparent)]
@@ -43,7 +43,7 @@ impl IntoResponse for APIError {
     let status = match self {
       Self::InvalidJson(_) | Self::JsonParsing(_) => StatusCode::NOT_ACCEPTABLE,
       Self::StatusCode(code, _) => code,
-      Self::JWT(_) | Self::Unauthorized | Self::UnauthorizedMessage(_) => StatusCode::UNAUTHORIZED,
+      Self::Jwt(_) | Self::Unauthorized | Self::UnauthorizedMessage(_) => StatusCode::UNAUTHORIZED,
       Self::HeaderParsing(_) | Self::Internal(_) | Self::Database(_) => {
         StatusCode::INTERNAL_SERVER_ERROR
       }
@@ -51,7 +51,7 @@ impl IntoResponse for APIError {
         .status()
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
       Self::OAuth(ref err) => match err {
-        OAuthError::BadStatus(status) => status.clone(),
+        OAuthError::BadStatus(status) => *status,
         _ => StatusCode::UNAUTHORIZED,
       },
     };

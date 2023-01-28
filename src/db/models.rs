@@ -34,16 +34,18 @@ pub struct SessionCache {
 pub struct User {
   #[serde(rename = "_id")]
   pub _id: String,
+  pub name: String,
   pub picture: String,
   pub linked_accounts: HashSet<String>,
 }
 
 impl User {
-  pub fn new(provider_id: String, picture: String) -> Self {
+  pub fn new(provider_id: &str, name: &str, picture: &str) -> Self {
     Self {
-      _id: provider_id.clone(),
-      picture,
-      linked_accounts: HashSet::from([provider_id]),
+      _id: provider_id.to_string(),
+      name: name.to_string(),
+      picture: picture.to_string(),
+      linked_accounts: HashSet::from([provider_id.to_string()]),
     }
   }
 }
@@ -60,12 +62,6 @@ impl Collection for User {
     Self: Sized,
   {
     &USERS_CACHE
-  }
-}
-
-impl From<Provider> for User {
-  fn from(provider: Provider) -> Self {
-    Self::new(provider._id, provider.picture)
   }
 }
 

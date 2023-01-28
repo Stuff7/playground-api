@@ -45,7 +45,7 @@ pub fn sign_token(sub: &str) -> JWTResult<String> {
     },
     &KEYS.encoding,
   )
-  .map_err(|err| JWTError::Signing(err))
+  .map_err(JWTError::Signing)
 }
 
 pub fn verify_token(token: &str) -> JWTResult<TokenData<Claims>> {

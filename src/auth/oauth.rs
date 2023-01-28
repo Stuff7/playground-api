@@ -29,7 +29,7 @@ impl From<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>> for Toke
       access_token: token.access_token().secret().clone(),
       refresh_token: token
         .refresh_token()
-        .and_then(|refresh| Some(refresh.secret().clone())),
+        .map(|refresh| refresh.secret().clone()),
     }
   }
 }
@@ -52,7 +52,7 @@ impl Token {
       *self = token.into();
       return Ok(self);
     }
-    Err(OAuthError::NoRefreshToken.into())
+    Err(OAuthError::NoRefreshToken)
   }
 
   pub async fn request(
@@ -61,11 +61,7 @@ impl Token {
     request: reqwest::RequestBuilder,
   ) -> OAuthResult<Response> {
     match self
-      .try_request(
-        request
-          .try_clone()
-          .ok_or_else(|| OAuthError::InvalidRequestBody)?,
-      )
+      .try_request(request.try_clone().ok_or(OAuthError::InvalidRequestBody)?)
       .await
     {
       Ok(response) => Ok(response),

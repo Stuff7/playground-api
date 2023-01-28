@@ -13,7 +13,7 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
       .unwrap_or_default()
       .get(6..)
       .unwrap_or_default()
-      .split("-")
+      .split('-')
       .map(|v| v.parse::<usize>().ok())
       .collect::<Vec<_>>(),
     None => vec![Some(0), Some(FIRST_CONTENT_LENGTH)],
@@ -43,9 +43,10 @@ pub async fn json_response<T: serde::de::DeserializeOwned>(
   let status_code = response.status();
 
   if status_code.is_client_error() || status_code.is_server_error() {
-    return Err(
-      APIError::StatusCode(status_code, response.json::<serde_json::Value>().await.ok()).into(),
-    );
+    return Err(APIError::StatusCode(
+      status_code,
+      response.json::<serde_json::Value>().await.ok(),
+    ));
   }
 
   let response_text = response
