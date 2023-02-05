@@ -1,7 +1,13 @@
-use axum::http::HeaderMap;
+use axum::{
+  http::{HeaderMap, HeaderValue},
+  response::IntoResponse,
+};
+use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
 use crate::api::{APIError, APIResult};
+
+use format as f;
 
 const CONTENT_LENGTH: usize = 2 * 1024 * 1000; // 2MB
 const FIRST_CONTENT_LENGTH: usize = 5 * 1024 * 1000; // 5MB
@@ -37,6 +43,11 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
   (start, end)
 }
 
+pub enum JsonResult<T: DeserializeOwned> {
+  Typed(T),
+  Untyped(serde_json::Value),
+}
+
 pub async fn json_response<T: serde::de::DeserializeOwned>(
   response: reqwest::Response,
 ) -> APIResult<JsonResult<T>> {
@@ -62,7 +73,40 @@ pub async fn json_response<T: serde::de::DeserializeOwned>(
   }
 }
 
-pub enum JsonResult<T: DeserializeOwned> {
-  Typed(T),
-  Untyped(serde_json::Value),
+pub fn extract_header(headers: &HeaderMap, key: &str) -> APIResult<HeaderValue> {
+  Ok(
+    headers
+      .get(key)
+      .ok_or_else(|| APIError::Internal(f!("No {key:?} header found")))?
+      .into(),
+  )
+}
+
+/// Download video and stream on demand.
+pub async fn stream_video(
+  video_url: &str,
+  headers: HeaderMap,
+  client: &reqwest::Client,
+) -> APIResult<impl IntoResponse> {
+  let (range_start, range_end) = get_range(headers);
+  let byte_range = f!("{range_start}-{range_end}");
+
+  let response = client
+    .get(video_url)
+    .header("Range", f!("bytes={byte_range}"))
+    .send()
+    .await?;
+
+  let headers = response.headers();
+  let content_range = extract_header(headers, "Content-Range")?;
+  let content_type = extract_header(headers, "Content-Type")?;
+
+  let body = response.bytes().await?;
+
+  let mut headers = HeaderMap::new();
+  headers.insert("Accept-Ranges", "bytes".parse()?);
+  headers.insert("Content-Range", content_range);
+  headers.insert("Content-Type", content_type);
+
+  Ok((StatusCode::PARTIAL_CONTENT, headers, body))
 }

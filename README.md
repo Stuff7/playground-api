@@ -1,26 +1,27 @@
 # **Playground API**
 
-As of right now the only feature in this API is to play private videos from google drive using the most simple google oauth system.
+As of right now the only feature in this API is to play videos from google drive using the most simple google oauth system.
 
 ## **Required env vars**
 
 ```
+SOCKET_ADDRESS
+LOGIN_REDIRECT
 ALLOWED_ORIGINS
+JWT_SECRET
+MONGODB_URI
+GOOGLE_API_KEY
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URL
-JWT_SECRET
-LOGIN_REDIRECT
-MONGODB_URI
-SOCKET_ADDRESS
 ```
 
 # **Models**
 
-<span id="ProviderID">
+<span id="UserID">
 
 ```typescript
-type ProviderID = `${string}@${string}`;
+type UserID = `${string}@${string}`;
 ```
 
 </span>
@@ -29,46 +30,60 @@ type ProviderID = `${string}@${string}`;
 
 ```typescript
 interface User {
-  _id: ProviderID,
+  _id: UserID,
   name: string,
   picture: string,
-  linkedAccounts: ProviderID[],
 }
 ```
 
 </span>
 
-<span id="GoogleDriveKind">
+<span id="UserFile">
 
 ```typescript
-type GoogleDriveKind = `drive#${string}`;
-```
-
-</span>
-
-<span id="GoogleDriveFile">
-
-```typescript
-interface GoogleDriveFile {
-  kind: GoogleDriveKind,
-  id: string,
-  mimeType: string,
+interface UserFile {
+  _id: string,
+  folderId: string,
+  userId: string,
   name: string,
-  size: `${number}`,
-  videoMetadata: {
-    "width": number,
-    "height": number,
-    "durationMillis": `${number}`,
-  },
+  metadata: FileMetadata,
 }
 ```
 
 </span>
 
-<span id="GoogleDriveFilesResponse">
+<span id="FileMetadata">
 
 ```typescript
-type GoogleDriveFilesResponse = Record<ProviderID, GoogleDriveFile[]>;
+type FileMetadata = Video | Folder;
+```
+
+</span>
+
+<span id="Video">
+
+```typescript
+interface Video {
+  type: "video",
+  name: string,
+  playId: string,
+  durationMillis: number,
+  width: number,
+  height: number,
+  thumbnail: string,
+  mimeType: string,
+  sizeBytes: number,
+}
+```
+
+</span>
+
+<span id="Folder">
+
+```typescript
+interface Folder {
+  type: "folder",
+}
 ```
 
 </span>
@@ -78,24 +93,8 @@ type GoogleDriveFilesResponse = Record<ProviderID, GoogleDriveFile[]>;
 ## **Log in**
 
 ```
-GET /api/google/login
+GET /auth/google/login
 ```
-<table>
-  <thead>
-    <tr>
-      <th>Parameter</th>
-      <th>Value</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>current_login</td>
-      <td>string</td>
-      <td>Link the provider used to sign in to this token's user instead of creating a new user.</td>
-    </tr>
-  </tbody>
-</table>
 
 #### **Response**
 
@@ -147,11 +146,14 @@ The current logged in [`User`](#User).
 
 ---
 
-## **Get drive files**
+## **List files**
+
+*Requires Bearer Authorization*
 
 ```
-GET /api/google/drive/files
+GET /api/files
 ```
+
 <table>
   <thead>
     <tr>
@@ -162,26 +164,30 @@ GET /api/google/drive/files
   </thead>
   <tbody>
     <tr>
-      <td>user</td>
+      <td>folder</td>
       <td>string</td>
-      <td>Get only the files belonging to this provider ID.</td>
+      <td>Get files in this folder (Use "root" for top level folder).</td>
     </tr>
   </tbody>
 </table>
 
+
 #### **Response**
 
-[`GoogleDriveFile`](#GoogleDriveFile) for every [`ProviderID`](#ProviderID) requested [`GoogleDriveFilesResponse`](#GoogleDriveFilesResponse).
+[`UserFile`](#UserFile) list
 
 </br>
 
 ---
 
-## **Get single drive file**
+## **Update file**
+
+*Requires Bearer Authorization*
 
 ```
-GET /api/google/drive/files/:file_id
+PATCH /api/files/:file_id
 ```
+
 <table>
   <thead>
     <tr>
@@ -192,25 +198,135 @@ GET /api/google/drive/files/:file_id
   </thead>
   <tbody>
     <tr>
-      <td>user</td>
+      <td>folder</td>
       <td>string</td>
-      <td>User to which this drive file belongs to (Defaults to logged in user).</td>
+      <td>Move to this folder (Use "root" for top level folder).</td>
     </tr>
   </tbody>
 </table>
 
+**Request Body:** 
+
+``` typescript
+interface UpdateFileBody {
+  name?: string,
+}
+```
+
 #### **Response**
 
-The [`GoogleDriveFile`](#GoogleDriveFile) requested .
+Updated [`UserFile`](#UserFile)
 
 </br>
 
 ---
 
-## **Stream drive video**
+## **Delete file**
+
+*Requires Bearer Authorization*
 
 ```
-GET /api/google/drive/video/:video_id
+DELETE /api/files/:file_id
+```
+
+#### **Response**
+
+The deleted [`UserFile`](#UserFile)
+
+</br>
+
+---
+
+## **Create folder**
+
+*Requires Bearer Authorization*
+
+```
+POST /api/files/folder
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Value</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>folder</td>
+      <td>string</td>
+      <td>Create folder inside this folder (Use "root" for top level folder).</td>
+    </tr>
+  </tbody>
+</table>
+
+**Request Body:** 
+
+``` typescript
+interface CreateFolderBody {
+  name: string,
+}
+```
+
+#### **Response**
+
+Created [`UserFile`](#UserFile)
+
+</br>
+
+---
+
+## **Move files to folder**
+
+*Requires Bearer Authorization*
+
+```
+PUT /api/files/folder/move
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Value</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>folder</td>
+      <td>string</td>
+      <td>Move files to this folder (Use "root" for top level folder).</td>
+    </tr>
+  </tbody>
+</table>
+
+**Request Body:** 
+
+``` typescript
+interface MoveFilesBody {
+  files: string[],
+}
+```
+
+#### **Response**
+
+``` typescript
+interface MoveFilesResponse {
+  movedCount: number,
+}
+```
+
+</br>
+
+---
+
+## **Get video metadata**
+
+```
+GET /api/files/video/metadata
 ```
 <table>
   <thead>
@@ -222,18 +338,69 @@ GET /api/google/drive/video/:video_id
   </thead>
   <tbody>
     <tr>
-      <td>token (Required)</td>
+      <td>video_url</td>
       <td>string</td>
-      <td>Authorization to access this file.</td>
-    </tr>
-    <tr>
-      <td>user</td>
-      <td>string</td>
-      <td>User to which this drive file belongs to (Defaults to logged in user).</td>
+      <td>URL of the video (Only google drive supported).</td>
     </tr>
   </tbody>
 </table>
 
 #### **Response**
 
-Partial content video data (Intended to be used in html video element).
+The [`Video`](#Video) metadata requested (`type` field is omitted).
+
+</br>
+
+---
+
+## **Create video**
+
+*Requires Bearer Authorization*
+
+```
+POST /api/files/video/:video_id
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Value</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>folder</td>
+      <td>string</td>
+      <td>Create video inside this folder (Use "root" for top level folder).</td>
+    </tr>
+  </tbody>
+</table>
+
+**Request Body:** 
+
+``` typescript
+interface CreateVideoBody {
+  name?: string,
+  thumbnail?: string,
+}
+```
+
+#### **Response**
+
+The created [`UserFile`](#UserFile)
+
+</br>
+
+---
+
+## **Play video**
+
+```
+GET /api/files/video/:video_id
+```
+
+#### **Response**
+
+Video content.

@@ -1,10 +1,9 @@
 use oauth2::{
   basic::{BasicClient, BasicErrorResponseType, BasicTokenType},
   reqwest::async_http_client,
-  AuthorizationCode, EmptyExtraTokenFields, RefreshToken, RequestTokenError, StandardErrorResponse,
+  AuthorizationCode, EmptyExtraTokenFields, RequestTokenError, StandardErrorResponse,
   StandardTokenResponse, TokenResponse,
 };
-use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,44 +41,6 @@ impl Token {
       .await?;
     Ok(token.into())
   }
-
-  pub async fn refresh(&mut self, client: &BasicClient) -> OAuthResult<&Self> {
-    if let Some(refresh_token) = &self.refresh_token {
-      let token = client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token.clone()))
-        .request_async(async_http_client)
-        .await?;
-      *self = token.into();
-      return Ok(self);
-    }
-    Err(OAuthError::NoRefreshToken)
-  }
-
-  pub async fn request(
-    &mut self,
-    oauth_client: &BasicClient,
-    request: reqwest::RequestBuilder,
-  ) -> OAuthResult<Response> {
-    match self
-      .try_request(request.try_clone().ok_or(OAuthError::InvalidRequestBody)?)
-      .await
-    {
-      Ok(response) => Ok(response),
-      Err(_) => {
-        self.refresh(oauth_client).await?;
-        self.try_request(request).await
-      }
-    }
-  }
-
-  async fn try_request(&self, request: reqwest::RequestBuilder) -> OAuthResult<Response> {
-    request
-      .bearer_auth(self.access_token.clone())
-      .send()
-      .await?
-      .error_for_status()
-      .map_err(|err| OAuthError::BadStatus(err.status().unwrap_or(StatusCode::UNAUTHORIZED)))
-  }
 }
 
 #[derive(Error, Debug)]
@@ -88,12 +49,6 @@ pub enum OAuthError {
   Exchange(#[from] AsyncRequestError),
   #[error(transparent)]
   Request(#[from] reqwest::Error),
-  #[error("Bad request status: {0}")]
-  BadStatus(StatusCode),
-  #[error("Could not handle request body")]
-  InvalidRequestBody,
-  #[error("Missing refresh token")]
-  NoRefreshToken,
 }
 
 type OAuthResult<T> = Result<T, OAuthError>;

@@ -1,0 +1,16 @@
+use("playground");
+
+db.users.drop();
+db.sessions.drop();
+db.files.drop();
+
+db.createCollection("users");
+db.createCollection("sessions");
+db.createCollection("files");
+
+db.files.createIndex( { userId: 1, folderId: 1, name: 1 }, { unique: true } );
+
+db.sessions.insertOne({
+  _id: "sessions",
+  sessions: [],
+});

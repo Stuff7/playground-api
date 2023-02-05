@@ -3,10 +3,7 @@ mod models;
 pub use models::*;
 
 use crate::{
-  auth::{
-    jwt::{self, JWTError},
-    oauth::Token,
-  },
+  auth::jwt::{self, JWTError},
   console::Colorize,
   env_var, log, GracefulExit,
 };
@@ -17,15 +14,18 @@ use mongodb::{
     ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig, ReturnDocument,
     UpdateOptions,
   },
+  results::UpdateResult,
   Client,
 };
 use once_cell::sync::{Lazy, OnceCell};
 use thiserror::Error;
 
+use format as f;
+
 // First we load the database within the main async runtime
 static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
 // Then we get the database lazily, exiting the app if the database was not initialized
-static DATABASE: Lazy<&Database> = Lazy::new(|| {
+pub static DATABASE: Lazy<&Database> = Lazy::new(|| {
   DATABASE_RESULT
     .get()
     .ok_or(DBError::Uninitialized)
@@ -82,51 +82,40 @@ pub async fn save_sessions() {
     .unwrap_or_exit("Could not save sessions to database");
 }
 
-pub async fn save_user(user: &User, provider: Provider) -> DBResult<String> {
+pub async fn save_user(user: &User) -> DBResult<String> {
   let token = jwt::sign_token(&user._id)?;
-  DATABASE.create(user).await?;
-  DATABASE.replace(&provider).await?;
-  Ok(token)
-}
-
-pub async fn add_provider_to_user(mut user: User, provider: Provider) -> DBResult<String> {
-  DATABASE.replace(&provider).await?;
-  user.linked_accounts.insert(provider._id);
-  let token = jwt::sign_token(&user._id)?;
-  DATABASE.replace(&user).await?;
-  Ok(token)
-}
-
-pub async fn update_provider_token(id: &str, token: Token) -> DBResult {
-  let mut update = to_document(&token)?;
-  if token.refresh_token.is_none() {
-    if let Some(provider) = DATABASE.find_by_id::<Provider>(id).await? {
-      update.insert("refreshToken", provider.token.refresh_token);
-    }
+  if let Some(user) = DATABASE.create(user, None).await? {
+    DATABASE
+      .create(&UserFile::new_root_folder(user._id), None)
+      .await?;
   }
-  DATABASE
-    .update_by_id::<Provider>(id, doc! { "token": update })
-    .await?;
-  Ok(())
+  Ok(token)
 }
 
-pub async fn find_by_id<T: Collection>(id: &str) -> Option<T> {
-  DATABASE
-    .find_by_id::<T>(id)
-    .await
-    .map_err(|err| {
-      log!(err@"An error occurred in find_by_id: {err}");
-      err
-    })
-    .ok()
-    .flatten()
+pub async fn save_file(file: &UserFile) -> DBResult<Option<UserFile>> {
+  let mut query = &mut PartialUserFile::default();
+  query.user_id = Some(file.user_id.clone());
+  query.folder_id = Some(file.folder_id.clone());
+  query.name = Some(file.name.clone());
+  DATABASE.create(file, Some(to_document(query)?)).await
 }
 
 #[derive(Debug)]
 pub struct Database(mongodb::Database);
 
 impl Database {
-  async fn find_by_id<T: Collection>(&self, id: &str) -> DBResult<Option<T>> {
+  pub async fn find_many<T: Collection>(&self, query: Document) -> DBResult<Vec<T>> {
+    let collection = self.collection::<T>();
+    let mut cursor = collection.find(query, None).await?;
+    let mut documents = Vec::new();
+    while cursor.advance().await? {
+      let document = cursor.deserialize_current()?;
+      documents.push(document);
+    }
+    Ok(documents)
+  }
+
+  pub async fn find_by_id<T: Collection>(&self, id: &str) -> DBResult<Option<T>> {
     let mut cache = T::cache().lock().await;
     if let Some(doc) = cache.get(id).cloned() {
       log!("[find] Cache hit {doc:?}\n");
@@ -141,27 +130,62 @@ impl Database {
     Ok(maybe_doc)
   }
 
-  async fn update_by_id<T: Collection>(&self, id: &str, update: Document) -> DBResult {
+  pub async fn delete<T: Collection>(&self, query: Document) -> DBResult<Option<T>> {
+    let collection = self.collection::<T>();
+    let maybe_doc = collection.find_one_and_delete(query, None).await?;
+    let mut cache = T::cache().lock().await;
+    if let Some(ref doc) = maybe_doc {
+      log!("[delete] Clearing cache {doc:?}\n");
+      cache.remove(doc.id());
+    }
+    Ok(maybe_doc)
+  }
+
+  pub async fn update<T: Collection>(
+    &self,
+    update: Document,
+    query: Document,
+  ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     let options = FindOneAndUpdateOptions::builder()
       .return_document(ReturnDocument::After)
       .build();
     let maybe_doc = collection
-      .find_one_and_update(doc! { "_id": id }, doc! { "$set": update }, options)
+      .find_one_and_update(query, doc! { "$set": update }, options)
       .await?;
-    if let Some(doc) = maybe_doc {
+    if let Some(ref doc) = maybe_doc {
       log!("[update] Caching data {doc:?}\n");
-      T::cache().lock().await.insert(id.to_string(), doc.clone());
+      T::cache()
+        .lock()
+        .await
+        .insert(doc.id().to_string(), doc.clone());
     }
-    Ok(())
+    Ok(maybe_doc)
+  }
+
+  pub async fn update_many<T: Collection>(
+    &self,
+    update: Document,
+    query: Document,
+  ) -> DBResult<UpdateResult> {
+    let collection = self.collection::<T>();
+    let result = collection
+      .update_many(query, doc! { "$set": update }, None)
+      .await?;
+    Ok(result)
   }
 
   /// Replace doc in collection or create it if it doesn't exist.
-  async fn replace<T: Collection>(&self, doc: &T) -> DBResult {
+  #[allow(dead_code)]
+  pub async fn replace<T: Collection>(&self, doc: &T, query: Option<Document>) -> DBResult {
     let collection = self.collection::<T>();
     let upsert = ReplaceOptions::builder().upsert(true).build();
     collection
-      .replace_one(doc! { "_id": doc.id() }, doc, upsert)
+      .replace_one(
+        query.unwrap_or_else(|| doc! { "_id": doc.id() }),
+        doc,
+        upsert,
+      )
       .await?;
     log!("[replace] Caching data {doc:?}\n");
     T::cache()
@@ -172,38 +196,38 @@ impl Database {
   }
 
   /// Insert doc only if it doesn't exist.
-  async fn create<T: Collection>(&self, doc: &T) -> DBResult {
+  pub async fn create<T: Collection>(
+    &self,
+    doc: &T,
+    query: Option<Document>,
+  ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     let upsert = UpdateOptions::builder().upsert(true).build();
     let result = collection
       .update_one(
-        doc! { "_id": doc.id() },
+        query.unwrap_or_else(|| doc! { "_id": doc.id() }),
         doc! { "$setOnInsert": to_document(&doc)? },
         upsert,
       )
       .await?;
-    let doc_to_save = if result.matched_count == 1 && result.modified_count == 0 {
-      collection
-        .find_one(doc! { "_id": doc.id() }, None)
-        .await?
-        .ok_or_else(|| {
-          DBError::Logic(
-            "The new doc was not created even though it didn't exist (This should never happen)"
-              .to_string(),
-          )
-        })?
-    } else {
-      doc.clone()
-    };
-    log!("[create] Caching data {doc_to_save:?}\n");
-    T::cache()
-      .lock()
-      .await
-      .insert(doc_to_save.id().to_string(), doc_to_save);
-    Ok(())
+    let mut updated_doc = None;
+    let update_done = result.upserted_id.is_some();
+    if update_done {
+      let id = doc.id();
+      log!("[create] Caching data {doc:?}\n");
+      let cached_doc = self.find_by_id::<T>(id).await?.ok_or_else(|| {
+        DBError::Fatal(f!("Doc with id {id:?} was updated but it was not found",))
+      })?;
+      T::cache()
+        .lock()
+        .await
+        .insert(id.to_string(), cached_doc.clone());
+      updated_doc = Some(cached_doc);
+    }
+    Ok(updated_doc)
   }
 
-  fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
+  pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
     self.0.collection(T::collection_name())
   }
 }
@@ -218,10 +242,12 @@ pub enum DBError {
   AlreadyInitialized(Database),
   #[error(transparent)]
   Jwt(#[from] JWTError),
-  #[error("Logical Error: {0}")]
-  Logic(String),
   #[error("Error serializing bson: {0}")]
   Bson(#[from] bson::ser::Error),
+  #[error("Error parsing object id: {0}")]
+  BsonOid(#[from] bson::oid::Error),
+  #[error("Fatal database error: {0}")]
+  Fatal(String),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;

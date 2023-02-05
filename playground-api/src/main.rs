@@ -25,7 +25,9 @@ use tower_http::cors::CorsLayer;
 #[tokio::main]
 async fn main() {
   db::init().await;
-  let google_api = auth::google::api().unwrap_or_exit("Could not initialize Google API");
+  let auth_routes = auth::api().unwrap_or_exit("Could not initialize auth routes.");
+  let files_api = routes::files::api().unwrap_or_exit("Could not initialize video API.");
+
   let cors = CorsLayer::new()
     .allow_methods(tower_http::cors::Any)
     .allow_headers(tower_http::cors::Any);
@@ -42,8 +44,9 @@ async fn main() {
   let app = Router::new()
     .route("/logout", delete(logout))
     .route("/ping", get(ping))
-    .nest("/api/google", google_api)
+    .nest("/auth", auth_routes)
     .nest("/api/users", routes::users::api())
+    .nest("/api/files", files_api)
     .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")
