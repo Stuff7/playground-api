@@ -1,6 +1,6 @@
 # **Playground API**
 
-As of right now the only feature in this API is to play videos from google drive using the most simple google oauth system.
+Google authentication and made up files system.
 
 ## **Required env vars**
 
