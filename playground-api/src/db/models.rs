@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use mongodb::bson::{doc, oid::ObjectId, to_bson, to_document, Document};
 use once_cell::sync::Lazy;
@@ -9,20 +9,13 @@ use partial_struct::{partial, CamelFields};
 
 use super::DBResult;
 
-pub type Cache<T> = Lazy<Mutex<HashMap<String, T>>>;
-
 pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-pub static USERS_CACHE: Cache<User> = Lazy::new(|| Mutex::new(HashMap::new()));
-pub static USER_FILES_CACHE: Cache<UserFile> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub trait Collection:
   std::fmt::Debug + Serialize + DeserializeOwned + Unpin + Send + Sync + Clone + 'static
 {
   fn collection_name() -> &'static str;
   fn id(&self) -> &str;
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized;
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,12 +50,6 @@ impl Collection for User {
   fn id(&self) -> &str {
     &self._id
   }
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized,
-  {
-    &USERS_CACHE
-  }
 }
 
 #[partial]
@@ -75,6 +62,15 @@ pub struct UserFile {
   pub user_id: String,
   pub name: String,
   pub metadata: FileMetadata,
+}
+
+impl Collection for UserFile {
+  fn collection_name() -> &'static str {
+    "files"
+  }
+  fn id(&self) -> &str {
+    &self.id
+  }
 }
 
 impl UserFile {
@@ -180,19 +176,4 @@ pub struct Video {
   pub thumbnail: String,
   pub mime_type: String,
   pub size_bytes: u64,
-}
-
-impl Collection for UserFile {
-  fn collection_name() -> &'static str {
-    "files"
-  }
-  fn id(&self) -> &str {
-    &self.id
-  }
-  fn cache() -> &'static Cache<Self>
-  where
-    Self: Sized,
-  {
-    &USER_FILES_CACHE
-  }
 }

@@ -20,8 +20,6 @@ use mongodb::{
 use once_cell::sync::{Lazy, OnceCell};
 use thiserror::Error;
 
-use format as f;
-
 // First we load the database within the main async runtime
 static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
 // Then we get the database lazily, exiting the app if the database was not initialized
@@ -116,29 +114,13 @@ impl Database {
   }
 
   pub async fn find_by_id<T: Collection>(&self, id: &str) -> DBResult<Option<T>> {
-    let mut cache = T::cache().lock().await;
-    if let Some(doc) = cache.get(id).cloned() {
-      log!("[find] Cache hit {doc:?}\n");
-      return Ok(Some(doc));
-    }
     let collection = self.collection::<T>();
-    let maybe_doc = collection.find_one(doc! { "_id": id }, None).await?;
-    if let Some(doc) = maybe_doc.clone() {
-      log!("[find] Caching data {doc:?}\n");
-      cache.insert(id.to_string(), doc);
-    }
-    Ok(maybe_doc)
+    Ok(collection.find_one(doc! { "_id": id }, None).await?)
   }
 
   pub async fn delete<T: Collection>(&self, query: Document) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
-    let maybe_doc = collection.find_one_and_delete(query, None).await?;
-    let mut cache = T::cache().lock().await;
-    if let Some(ref doc) = maybe_doc {
-      log!("[delete] Clearing cache {doc:?}\n");
-      cache.remove(doc.id());
-    }
-    Ok(maybe_doc)
+    Ok(collection.find_one_and_delete(query, None).await?)
   }
 
   pub async fn update<T: Collection>(
@@ -150,17 +132,11 @@ impl Database {
     let options = FindOneAndUpdateOptions::builder()
       .return_document(ReturnDocument::After)
       .build();
-    let maybe_doc = collection
-      .find_one_and_update(query, doc! { "$set": update }, options)
-      .await?;
-    if let Some(ref doc) = maybe_doc {
-      log!("[update] Caching data {doc:?}\n");
-      T::cache()
-        .lock()
-        .await
-        .insert(doc.id().to_string(), doc.clone());
-    }
-    Ok(maybe_doc)
+    Ok(
+      collection
+        .find_one_and_update(query, doc! { "$set": update }, options)
+        .await?,
+    )
   }
 
   pub async fn update_many<T: Collection>(
@@ -187,11 +163,6 @@ impl Database {
         upsert,
       )
       .await?;
-    log!("[replace] Caching data {doc:?}\n");
-    T::cache()
-      .lock()
-      .await
-      .insert(doc.id().to_string(), doc.clone());
     Ok(())
   }
 
@@ -202,29 +173,18 @@ impl Database {
     query: Option<Document>,
   ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
-    let upsert = UpdateOptions::builder().upsert(true).build();
+    let upsert = FindOneAndUpdateOptions::builder()
+      .return_document(ReturnDocument::After)
+      .upsert(true)
+      .build();
     let result = collection
-      .update_one(
+      .find_one_and_update(
         query.unwrap_or_else(|| doc! { "_id": doc.id() }),
         doc! { "$setOnInsert": to_document(&doc)? },
         upsert,
       )
       .await?;
-    let mut updated_doc = None;
-    let update_done = result.upserted_id.is_some();
-    if update_done {
-      let id = doc.id();
-      log!("[create] Caching data {doc:?}\n");
-      let cached_doc = self.find_by_id::<T>(id).await?.ok_or_else(|| {
-        DBError::Fatal(f!("Doc with id {id:?} was updated but it was not found",))
-      })?;
-      T::cache()
-        .lock()
-        .await
-        .insert(id.to_string(), cached_doc.clone());
-      updated_doc = Some(cached_doc);
-    }
-    Ok(updated_doc)
+    Ok(result)
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
@@ -246,8 +206,6 @@ pub enum DBError {
   Bson(#[from] bson::ser::Error),
   #[error("Error parsing object id: {0}")]
   BsonOid(#[from] bson::oid::Error),
-  #[error("Fatal database error: {0}")]
-  Fatal(String),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;
