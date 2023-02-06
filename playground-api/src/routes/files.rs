@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
   api::{self, APIError, APIResult},
-  auth::session::{Session, SessionWithFileId},
+  auth::session::{FileId, FolderBody, FolderQuery, Session},
   db,
   http::stream_video,
   AppResult,
@@ -60,12 +60,12 @@ pub async fn stream(
   .await
 }
 
-pub async fn get_files(session: Session) -> APIResult<Json<Vec<db::UserFile>>> {
+pub async fn get_files(
+  session: Session,
+  FolderQuery(folder): FolderQuery,
+) -> APIResult<Json<Vec<db::UserFile>>> {
   let files = db::DATABASE
-    .find_many::<db::UserFile>(db::UserFile::folder_query(
-      session.user_id,
-      session.query.folder,
-    )?)
+    .find_many::<db::UserFile>(db::UserFile::folder_query(session.user_id, folder)?)
     .await
     .unwrap_or_default();
   Ok(Json(files))
@@ -81,7 +81,7 @@ pub async fn create_video(
   session: Session,
   Path(video_id): Path<String>,
   State(request_client): State<reqwest::Client>,
-  Json(body): Json<CreateVideoBody>,
+  FolderBody(folder, body): FolderBody<CreateVideoBody>,
 ) -> APIResult<Json<db::UserFile>> {
   let mut metadata = fetch_video_metadata(&request_client, &video_id).await?;
   if let Some(thumbnail) = body.thumbnail {
@@ -91,7 +91,7 @@ pub async fn create_video(
     save_file(&db::UserFile::from_video(
       metadata,
       session.user_id,
-      session.query.folder,
+      folder,
       body.name,
     ))
     .await?,
@@ -105,13 +105,13 @@ pub struct CreateFolderBody {
 
 pub async fn create_folder(
   session: Session,
-  Json(body): Json<CreateFolderBody>,
+  FolderBody(folder, body): FolderBody<CreateFolderBody>,
 ) -> APIResult<Json<db::UserFile>> {
   Ok(Json(
     save_file(&db::UserFile::new_folder(
       session.user_id,
       body.name,
-      session.query.folder,
+      folder,
     ))
     .await?,
   ))
@@ -130,12 +130,9 @@ pub struct MoveFilesResponse {
 
 pub async fn move_files(
   session: Session,
-  Json(mut body): Json<MoveFilesBody>,
+  FolderBody(folder, mut body): FolderBody<MoveFilesBody>,
 ) -> APIResult<Json<MoveFilesResponse>> {
-  let folder = session
-    .query
-    .folder
-    .unwrap_or_else(|| session.user_id.clone());
+  let folder = folder.unwrap_or_else(|| session.user_id.clone());
   body.files.remove(&session.user_id);
   body.files.remove(&folder);
   let update = db::UserFile::query(&db::PartialUserFile {
@@ -157,10 +154,11 @@ pub struct UpdateFileBody {
 }
 
 pub async fn update_file(
-  SessionWithFileId(session, file_id): SessionWithFileId,
-  Json(body): Json<UpdateFileBody>,
+  session: Session,
+  FileId(file_id): FileId,
+  FolderBody(folder, body): FolderBody<UpdateFileBody>,
 ) -> APIResult<Json<db::UserFile>> {
-  let update = db::UserFile::update_query(body.name, session.query.folder)?;
+  let update = db::UserFile::update_query(body.name, folder)?;
   let query = db::UserFile::user_query(file_id.clone(), session.user_id)?;
   Ok(Json(
     db::DATABASE
@@ -171,7 +169,8 @@ pub async fn update_file(
 }
 
 pub async fn delete_file(
-  SessionWithFileId(session, file_id): SessionWithFileId,
+  session: Session,
+  FileId(file_id): FileId,
 ) -> APIResult<Json<db::UserFile>> {
   Ok(Json(
     db::DATABASE

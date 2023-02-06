@@ -5,26 +5,21 @@ use crate::{
 
 use axum::{
   async_trait,
-  extract::{FromRequestParts, Path, Query, TypedHeader},
+  body::Body,
+  extract::{FromRequest, FromRequestParts, Path, Query, TypedHeader},
   headers::{authorization::Bearer, Authorization},
-  http::request::Parts,
-  RequestPartsExt,
+  http::{request::Parts, Request},
+  Json, RequestExt, RequestPartsExt,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::jwt;
 
 use format as f;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionQuery {
-  pub folder: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct Session {
   pub user_id: String,
-  pub query: SessionQuery,
 }
 
 impl Session {
@@ -43,7 +38,7 @@ impl Session {
     db::SESSIONS_CACHE.lock().await.remove(token);
   }
 
-  pub async fn from_token(token: &str, mut query: SessionQuery) -> APIResult<Self> {
+  pub async fn from_token(token: &str) -> APIResult<Self> {
     let mut cache = db::SESSIONS_CACHE.lock().await;
     let user_id = cache
       .contains(token)
@@ -53,8 +48,7 @@ impl Session {
         cache.remove(token);
         APIError::from(err)
       })?;
-    query.folder = assert_valid_folder(&user_id, &query.folder).await?;
-    Ok(Self { user_id, query })
+    Ok(Self { user_id })
   }
 }
 
@@ -77,27 +71,77 @@ where
         APIError::UnauthorizedMessage("Missing/Invalid Authorization header".to_string())
       })?;
 
-    let Query(query) = parts.extract::<Query<SessionQuery>>().await?;
-
-    Ok(Self::from_token(&token, query).await?)
+    Ok(Self::from_token(&token).await?)
   }
 }
 
-pub struct SessionWithFileId(pub Session, pub String);
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FolderId {
+  pub folder: Option<String>,
+}
+
+pub struct FolderQuery(pub Option<String>);
 
 #[async_trait]
-impl<S> FromRequestParts<S> for SessionWithFileId
+impl<S> FromRequestParts<S> for FolderQuery
 where
   S: Send + Sync,
 {
   type Rejection = APIError;
 
-  async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-    let session = Session::from_request_parts(parts, state).await?;
-    let Path(file_id) = parts.extract::<Path<String>>().await?;
+  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+    let session = parts.extract::<Session>().await?;
+    let Query(query) = parts.extract::<Query<FolderId>>().await?;
 
-    assert_writable_file(&session.user_id, &file_id, &session.query.folder).await?;
-    Ok(SessionWithFileId(session, file_id))
+    Ok(Self(
+      assert_valid_folder(&session.user_id, &query.folder).await?,
+    ))
+  }
+}
+
+pub struct FileId(pub String);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for FileId
+where
+  S: Send + Sync,
+{
+  type Rejection = APIError;
+
+  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+    let Path(file_id) = parts.extract::<Path<String>>().await?;
+    Ok(Self(file_id))
+  }
+}
+
+#[derive(Serialize)]
+pub struct FolderBody<T: DeserializeOwned>(pub Option<String>, pub T);
+
+#[async_trait]
+impl<S, T> FromRequest<S, Body> for FolderBody<T>
+where
+  S: Send + Sync,
+  T: DeserializeOwned,
+{
+  type Rejection = APIError;
+
+  async fn from_request(mut req: Request<Body>, _: &S) -> Result<Self, Self::Rejection> {
+    let session = req.extract_parts::<Session>().await?;
+    let file_id = req.extract_parts::<FileId>().await;
+    let Json(body) = req.extract::<Json<serde_json::Value>, _>().await?;
+    let folder = body
+      .get("folder")
+      .and_then(|v| v.as_str())
+      .map(String::from);
+
+    if let Ok(FileId(file_id)) = file_id {
+      assert_writable_file(&session.user_id, &file_id, &folder).await?;
+    }
+
+    Ok(FolderBody(
+      assert_valid_folder(&session.user_id, &folder).await?,
+      serde_json::from_value(body)?,
+    ))
   }
 }
 

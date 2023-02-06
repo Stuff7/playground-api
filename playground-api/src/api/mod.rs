@@ -26,6 +26,8 @@ pub enum APIError {
   BadQuery(#[from] axum::extract::rejection::QueryRejection),
   #[error("Bad path: {0}")]
   BadPath(#[from] axum::extract::rejection::PathRejection),
+  #[error("Bad JSON: {0}")]
+  BadJson(#[from] axum::extract::rejection::JsonRejection),
   #[error("JSON structure did not match type")]
   JsonParsing(serde_json::Value),
   #[error("Failed to parse header value: {0}")]
@@ -57,7 +59,9 @@ impl IntoResponse for APIError {
     let (status, body) = match self {
       Self::NotFound(_) => (StatusCode::NOT_FOUND, None),
       Self::Conflict(_) => (StatusCode::CONFLICT, None),
-      Self::BadRequest(_) | Self::BadQuery(_) | Self::BadPath(_) => (StatusCode::BAD_REQUEST, None),
+      Self::BadRequest(_) | Self::BadQuery(_) | Self::BadPath(_) | Self::BadJson(_) => {
+        (StatusCode::BAD_REQUEST, None)
+      }
       Self::JsonParsing(ref data) => (StatusCode::NOT_ACCEPTABLE, Some(data.clone())),
       Self::InvalidJson(_) => (StatusCode::NOT_ACCEPTABLE, None),
       Self::StatusCode(ref code, ref data) => (*code, data.clone()),

@@ -188,28 +188,12 @@ GET /api/files
 PATCH /api/files/:file_id
 ```
 
-<table>
-  <thead>
-    <tr>
-      <th>Parameter</th>
-      <th>Value</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>folder</td>
-      <td>string</td>
-      <td>Move to this folder (Use "root" for top level folder).</td>
-    </tr>
-  </tbody>
-</table>
-
 **Request Body:** 
 
 ``` typescript
 interface UpdateFileBody {
   name?: string,
+  folder?: string, // Move to this folder (Use "root" for top level folder).
 }
 ```
 
@@ -245,28 +229,12 @@ The deleted [`UserFile`](#UserFile)
 POST /api/files/folder
 ```
 
-<table>
-  <thead>
-    <tr>
-      <th>Parameter</th>
-      <th>Value</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>folder</td>
-      <td>string</td>
-      <td>Create folder inside this folder (Use "root" for top level folder).</td>
-    </tr>
-  </tbody>
-</table>
-
 **Request Body:** 
 
 ``` typescript
 interface CreateFolderBody {
   name: string,
+  folder?: string, // Create folder inside this folder (Use "root" for top level folder).
 }
 ```
 
@@ -308,6 +276,7 @@ PUT /api/files/folder/move
 ``` typescript
 interface MoveFilesBody {
   files: string[],
+  folder?: string, // Move files to this folder (Use "root" for top level folder).
 }
 ```
 
@@ -361,29 +330,13 @@ The [`Video`](#Video) metadata requested (`type` field is omitted).
 POST /api/files/video/:video_id
 ```
 
-<table>
-  <thead>
-    <tr>
-      <th>Parameter</th>
-      <th>Value</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>folder</td>
-      <td>string</td>
-      <td>Create video inside this folder (Use "root" for top level folder).</td>
-    </tr>
-  </tbody>
-</table>
-
 **Request Body:** 
 
 ``` typescript
 interface CreateVideoBody {
   name?: string,
   thumbnail?: string,
+  folder?: string, // Create video inside this folder (Use "root" for top level folder).
 }
 ```
 
