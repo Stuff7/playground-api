@@ -240,7 +240,7 @@ interface CreateFolderBody {
 
 #### **Response**
 
-Created [`UserFile`](#UserFile)
+The created [`UserFile`](#UserFile) or a 409 Conflict HTTP status error if a folder with the same name already exists in that folder
 
 </br>
 
@@ -342,7 +342,7 @@ interface CreateVideoBody {
 
 #### **Response**
 
-The created [`UserFile`](#UserFile)
+The created [`UserFile`](#UserFile) or a 409 Conflict HTTP status error if a video with the same name already exists in that folder
 
 </br>
 

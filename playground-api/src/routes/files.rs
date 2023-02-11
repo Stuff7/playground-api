@@ -94,7 +94,8 @@ pub async fn create_video(
       folder,
       body.name,
     ))
-    .await?,
+    .await?
+    .clone(),
   ))
 }
 
@@ -113,7 +114,8 @@ pub async fn create_folder(
       body.name,
       folder,
     ))
-    .await?,
+    .await?
+    .clone(),
   ))
 }
 
@@ -231,7 +233,7 @@ fn extract_drive_file_id(share_link: &str) -> Option<String> {
   })
 }
 
-async fn save_file(file: &db::UserFile) -> APIResult<db::UserFile> {
+async fn save_file(file: &db::UserFile) -> APIResult<&db::UserFile> {
   db::save_file(file).await?.ok_or_else(|| {
     APIError::Conflict(f!(
       "A file named {:?} already exists in folder with id {:?}",

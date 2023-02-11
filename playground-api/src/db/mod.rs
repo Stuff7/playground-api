@@ -84,13 +84,13 @@ pub async fn save_user(user: &User) -> DBResult<String> {
   let token = jwt::sign_token(&user._id)?;
   if let Some(user) = DATABASE.create(user, None).await? {
     DATABASE
-      .create(&UserFile::new_root_folder(user._id), None)
+      .create(&UserFile::new_root_folder(user._id.clone()), None)
       .await?;
   }
   Ok(token)
 }
 
-pub async fn save_file(file: &UserFile) -> DBResult<Option<UserFile>> {
+pub async fn save_file(file: &UserFile) -> DBResult<Option<&UserFile>> {
   let mut query = &mut PartialUserFile::default();
   query.user_id = Some(file.user_id.clone());
   query.folder_id = Some(file.folder_id.clone());
@@ -167,24 +167,21 @@ impl Database {
   }
 
   /// Insert doc only if it doesn't exist.
-  pub async fn create<T: Collection>(
+  pub async fn create<'a, T: Collection>(
     &self,
-    doc: &T,
+    doc: &'a T,
     query: Option<Document>,
-  ) -> DBResult<Option<T>> {
+  ) -> DBResult<Option<&'a T>> {
     let collection = self.collection::<T>();
-    let upsert = FindOneAndUpdateOptions::builder()
-      .return_document(ReturnDocument::After)
-      .upsert(true)
-      .build();
+    let upsert = UpdateOptions::builder().upsert(true).build();
     let result = collection
-      .find_one_and_update(
+      .update_one(
         query.unwrap_or_else(|| doc! { "_id": doc.id() }),
         doc! { "$setOnInsert": to_document(&doc)? },
         upsert,
       )
       .await?;
-    Ok(result)
+    Ok(result.upserted_id.is_some().then_some(doc))
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
