@@ -60,7 +60,7 @@ pub struct UserFile {
   pub id: String,
   pub folder_id: String,
   pub user_id: String,
-  pub name: String,
+  pub name: NonEmptyString,
   pub metadata: FileMetadata,
 }
 
@@ -79,34 +79,36 @@ impl UserFile {
     user_id: String,
     folder_id: Option<String>,
     custom_name: Option<String>,
-  ) -> Self {
-    Self {
+  ) -> DBResult<Self> {
+    Ok(Self {
       id: ObjectId::new().to_hex(),
       folder_id: folder_id.unwrap_or_else(|| user_id.clone()),
       user_id,
-      name: custom_name.unwrap_or_else(|| video.name.clone()),
+      name: custom_name
+        .unwrap_or_else(|| video.name.clone())
+        .try_into()?,
       metadata: FileMetadata::Video(video),
-    }
+    })
   }
 
-  pub fn new_folder(user_id: String, name: String, folder_id: Option<String>) -> Self {
-    Self {
+  pub fn new_folder(user_id: String, name: String, folder_id: Option<String>) -> DBResult<Self> {
+    Ok(Self {
       id: ObjectId::new().to_hex(),
       folder_id: folder_id.unwrap_or_else(|| user_id.clone()),
       user_id,
-      name,
+      name: name.try_into()?,
       metadata: FileMetadata::Folder,
-    }
+    })
   }
 
-  pub fn new_root_folder(user_id: String) -> Self {
-    Self {
+  pub fn new_root_folder(user_id: String) -> DBResult<Self> {
+    Ok(Self {
       id: user_id.clone(),
       folder_id: "root".to_string(),
       user_id,
-      name: "root".to_string(),
+      name: "root".try_into()?,
       metadata: FileMetadata::Folder,
-    }
+    })
   }
 
   pub fn user_query(file_id: String, user_id: String) -> DBResult<Document> {
@@ -133,7 +135,7 @@ impl UserFile {
 
   pub fn update_query(name: Option<String>, folder_id: Option<String>) -> DBResult<Document> {
     let update = &mut PartialUserFile::default();
-    update.name = name;
+    update.name = name.map(NonEmptyString::try_from).transpose()?;
     update.folder_id = folder_id;
     Self::query(update)
   }
@@ -176,4 +178,35 @@ pub struct Video {
   pub thumbnail: String,
   pub mime_type: String,
   pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NonEmptyString(String);
+
+impl NonEmptyString {
+  fn try_from_str(s: &str) -> super::DBResult<Self> {
+    if s.is_empty() {
+      Err(super::DBError::InvalidField(
+        "String cannot be empty".into(),
+      ))
+    } else {
+      Ok(NonEmptyString(s.to_string()))
+    }
+  }
+}
+
+impl TryFrom<String> for NonEmptyString {
+  type Error = super::DBError;
+
+  fn try_from(s: String) -> super::DBResult<Self> {
+    NonEmptyString::try_from_str(&s)
+  }
+}
+
+impl TryFrom<&str> for NonEmptyString {
+  type Error = super::DBError;
+
+  fn try_from(s: &str) -> super::DBResult<Self> {
+    NonEmptyString::try_from_str(s)
+  }
 }

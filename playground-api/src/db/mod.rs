@@ -84,7 +84,7 @@ pub async fn save_user(user: &User) -> DBResult<String> {
   let token = jwt::sign_token(&user._id)?;
   if let Some(user) = DATABASE.create(user, None).await? {
     DATABASE
-      .create(&UserFile::new_root_folder(user._id.clone()), None)
+      .create(&UserFile::new_root_folder(user._id.clone())?, None)
       .await?;
   }
   Ok(token)
@@ -203,6 +203,8 @@ pub enum DBError {
   Bson(#[from] bson::ser::Error),
   #[error("Error parsing object id: {0}")]
   BsonOid(#[from] bson::oid::Error),
+  #[error("Invalid field error: {0}")]
+  InvalidField(String),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;

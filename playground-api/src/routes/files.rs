@@ -93,7 +93,7 @@ pub async fn create_video(
       session.user_id,
       folder,
       body.name,
-    ))
+    )?)
     .await?
     .clone(),
   ))
@@ -113,7 +113,7 @@ pub async fn create_folder(
       session.user_id,
       body.name,
       folder,
-    ))
+    )?)
     .await?
     .clone(),
   ))
