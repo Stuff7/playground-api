@@ -4,9 +4,12 @@ mod console;
 mod db;
 mod http;
 mod routes;
+mod websockets;
 
 use auth::session::Session;
 use console::Colorize;
+
+use std::net::SocketAddr;
 
 use format as f;
 
@@ -17,7 +20,6 @@ use axum::{
   Router, TypedHeader,
 };
 use reqwest::StatusCode;
-use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::signal;
 use tower_http::cors::CorsLayer;
@@ -47,6 +49,7 @@ async fn main() {
     .nest("/auth", auth_routes)
     .nest("/api/users", routes::users::api())
     .nest("/api/files", files_api)
+    .nest("/ws", websockets::api())
     .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")
@@ -57,7 +60,7 @@ async fn main() {
   log!(success@"listening on {socket_address}");
 
   axum::Server::bind(&socket_address)
-    .serve(app.into_make_service())
+    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
     .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap_or_exit("Failed to start server");

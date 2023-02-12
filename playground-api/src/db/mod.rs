@@ -10,9 +10,10 @@ use crate::{
 
 use mongodb::{
   bson::{self, doc, to_document, Document},
+  change_stream::{event::ChangeStreamEvent, ChangeStream},
   options::{
-    ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig, ReturnDocument,
-    UpdateOptions,
+    ChangeStreamOptions, ClientOptions, FindOneAndUpdateOptions, FullDocumentType, ReplaceOptions,
+    ResolverConfig, ReturnDocument, UpdateOptions,
   },
   results::UpdateResult,
   Client,
@@ -182,6 +183,19 @@ impl Database {
       )
       .await?;
     Ok(result.upserted_id.is_some().then_some(doc))
+  }
+
+  pub async fn watch<T: Collection>(&self) -> DBResult<ChangeStream<ChangeStreamEvent<T>>> {
+    let collection = self.collection::<T>();
+    let pipeline = vec![doc! {
+      "$match": {
+        "operationType": "update"
+      }
+    }];
+    let options = ChangeStreamOptions::builder()
+      .full_document(Some(FullDocumentType::UpdateLookup))
+      .build();
+    Ok(collection.watch(pipeline, options).await?)
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
