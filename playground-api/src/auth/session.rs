@@ -75,6 +75,26 @@ where
   }
 }
 
+pub struct SessionQuery(pub Session);
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenQuery {
+  pub token: String,
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for SessionQuery
+where
+  S: Send + Sync,
+{
+  type Rejection = APIError;
+
+  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+    let Query(query) = parts.extract::<Query<TokenQuery>>().await?;
+    Ok(Self(Session::from_token(&query.token).await?))
+  }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FolderId {
   pub folder: Option<String>,

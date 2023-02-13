@@ -1,8 +1,7 @@
-use crate::{
-  console::Colorize,
-  db::{DBError, UserFile, DATABASE},
-  log,
-};
+mod channel;
+mod file_watcher;
+
+use crate::{auth::session::SessionQuery, console::Colorize, db::DBError, log};
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -10,8 +9,9 @@ use std::ops::ControlFlow;
 
 use axum::{
   extract::{
-    ws::{close_code, Message, WebSocket, WebSocketUpgrade},
-    TypedHeader,
+    connect_info::ConnectInfo,
+    ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade},
+    State, TypedHeader,
   },
   headers,
   response::IntoResponse,
@@ -19,20 +19,28 @@ use axum::{
   Router,
 };
 
-use tokio::sync::oneshot;
-
-use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::CloseFrame;
-
-use futures::{
-  sink::SinkExt,
-  stream::{SplitSink, StreamExt},
-};
+use futures::{sink::SinkExt, stream::StreamExt};
 
 use thiserror::Error;
 
+use self::{
+  channel::{Sender, SocketChannel, SocketEvent},
+  file_watcher::FileWatcher,
+};
+
+#[derive(Debug, Clone)]
+pub struct WebSocketState {
+  sender: Sender,
+}
+
 pub fn api() -> Router {
-  Router::new().route("/", get(ws_handler))
+  let socket_channel = SocketChannel::new();
+  FileWatcher::new(socket_channel.sender.clone());
+  Router::new()
+    .route("/", get(ws_handler))
+    .with_state(WebSocketState {
+      sender: socket_channel.sender,
+    })
 }
 
 /// The handler for the HTTP request (this gets called when the HTTP GET lands at the start
@@ -43,7 +51,9 @@ pub fn api() -> Router {
 async fn ws_handler(
   ws: WebSocketUpgrade,
   user_agent: Option<TypedHeader<headers::UserAgent>>,
+  SessionQuery(session): SessionQuery,
   ConnectInfo(addr): ConnectInfo<SocketAddr>,
+  State(state): State<WebSocketState>,
 ) -> impl IntoResponse {
   let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
     user_agent.to_string()
@@ -52,11 +62,18 @@ async fn ws_handler(
   };
   log!(success@"`{user_agent}` at {addr} connected.");
 
-  ws.on_upgrade(move |socket| handle_socket(socket, addr))
+  ws.on_upgrade(move |socket| {
+    handle_socket(socket, addr, session.user_id, state.sender)
+  })
 }
 
 /// WebSocket state machine (one will be spawned per connection)
-async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(
+  mut socket: WebSocket,
+  who: SocketAddr,
+  user_id: String,
+  socket_sender: Sender,
+) {
   if let Err(error) = socket.send(Message::Ping(vec![1, 2, 3])).await {
     log!(err@"Could not send ping to {who}.\n\nError: {error}");
     return;
@@ -67,26 +84,47 @@ async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
   let (mut sender, mut receiver) = socket.split();
 
   // Task to notify the client of any updates in the files collection
-  let (send_tx, mut send_rx) = oneshot::channel::<()>();
+  let mut socket_receiver = socket_sender.subscribe();
+  let event_user_id = user_id.clone();
   let mut send_task = tokio::spawn(async move {
-    match user_files_listener(&who, &mut send_rx, &mut sender).await {
-      Ok(sent_msg_count) => sent_msg_count,
-      Err(send_task_err) => {
-        log!(err@"There was an error in the send task: {send_task_err}");
-        0
+    while let Ok(event) = socket_receiver.recv().await {
+      match event {
+        SocketEvent::Exit(user_id) if user_id == event_user_id => {
+          log!(info@"Files listener task received exit signal, exiting...");
+          return;
+        }
+        SocketEvent::Exit(user_id) => {
+          log!(info@"Exit received for {user_id} but id is {event_user_id} so we ignore");
+          continue;
+        }
+        SocketEvent::FileChange(change) => {
+          if change.user_id != event_user_id {
+            continue;
+          }
+          let Ok(json) = serde_json::to_string(&change) else {return};
+          if let Err(error) = sender.send(Message::Text(json)).await {
+            log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
+            return;
+          }
+        }
       }
+    }
+    log!("Closing connection: {who}...");
+    if let Err(error) = sender
+      .send(Message::Close(Some(CloseFrame {
+        code: close_code::NORMAL,
+        reason: Cow::from("Goodbye"),
+      })))
+      .await
+    {
+      log!(err@"Could not close connection {who}: {error}");
     }
   });
 
   // Task to receive messages from the client and log them to the console
-  let (recv_tx, mut recv_rx) = oneshot::channel::<()>();
   let mut recv_task = tokio::spawn(async move {
     let mut count = 0;
     while let Some(Ok(msg)) = receiver.next().await {
-      if exit_received(&mut recv_rx) {
-        log!(info@"Message processing task received exit signal, exiting...");
-        break;
-      }
       count += 1;
       if process_message(msg, who).is_break() {
         break;
@@ -99,11 +137,8 @@ async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
   tokio::select! {
     rv_a = (&mut send_task) => {
       match rv_a {
-        Ok(a) => log!(success@"Sent {a} messages to {who}"),
+        Ok(_) => log!(success@"Sent messages to {who}"),
         Err(a) => log!(err@"Error sending messages {a:?}")
-      }
-      if recv_tx.send(()).is_err() {
-        return;
       }
     },
     rv_b = (&mut recv_task) => {
@@ -111,8 +146,8 @@ async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
         Ok(b) => log!(success@"Received {b} messages"),
         Err(b) => log!(err@"Error receiving messages {b:?}")
       }
-      if send_tx.send(()).is_err() {
-        return;
+      if let Err(error) = socket_sender.send(SocketEvent::Exit(user_id)) {
+        log!(err@"Error sending exit from message receiver task\n\nError:{error}");
       }
     }
   }
@@ -153,52 +188,6 @@ fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
   ControlFlow::Continue(())
 }
 
-async fn user_files_listener(
-  connection_id: &SocketAddr,
-  send_rx: &mut oneshot::Receiver<()>,
-  sender: &mut SplitSink<WebSocket, Message>,
-) -> WebSocketResult<u32> {
-  log!(info@"Listening for user files changes for connection {connection_id}");
-  let mut change_stream = DATABASE.watch::<UserFile>().await?;
-  let mut sent_msg_count = 0;
-
-  while let Some(result) = change_stream.next().await {
-    if exit_received(send_rx) {
-      log!(info@"Files listener task received exit signal, exiting...");
-      return Ok(sent_msg_count);
-    }
-    if let Some(file_change) = result.map_err(DBError::from)?.full_document {
-      let message = serde_json::to_string(&file_change)?;
-
-      if let Err(error) = sender.send(Message::Text(message)).await {
-        log!(err@"Could not send server message.\n\nError: {error}");
-        return Ok(sent_msg_count);
-      }
-      sent_msg_count += 1;
-    }
-  }
-
-  log!("Closing connection: {connection_id}...");
-  if let Err(error) = sender
-    .send(Message::Close(Some(CloseFrame {
-      code: close_code::NORMAL,
-      reason: Cow::from("Goodbye"),
-    })))
-    .await
-  {
-    log!(err@"Could not close connection {connection_id}: {error}");
-  }
-  Ok(sent_msg_count)
-}
-
-fn exit_received<T>(rx: &mut oneshot::Receiver<T>) -> bool {
-  let Err(err) = rx.try_recv() else {return true};
-  if let oneshot::error::TryRecvError::Closed = err {
-    return true;
-  }
-  false
-}
-
 #[derive(Error, Debug)]
 pub enum WebSocketError {
   #[error("A JSON error occurred in a WebSocket: {0}")]
@@ -206,5 +195,3 @@ pub enum WebSocketError {
   #[error("A database error occurred in a WebSocket: {0}")]
   Database(#[from] DBError),
 }
-
-type WebSocketResult<T = ()> = Result<T, WebSocketError>;
