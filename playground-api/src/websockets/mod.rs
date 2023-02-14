@@ -81,7 +81,7 @@ async fn handle_socket(
 
   log!(success@"Pinged {socket_id}...");
 
-  let (mut socker_sender, mut socket_receiver) = socket.split();
+  let (mut socket_sender, mut socket_receiver) = socket.split();
 
   // Task to notify the client of any updates in the files collection
   let mut channel_receiver = channel_sender.subscribe();
@@ -102,7 +102,7 @@ async fn handle_socket(
             continue;
           }
           let Ok(json) = serde_json::to_string(&change) else {return};
-          if let Err(error) = socker_sender.send(Message::Text(json)).await {
+          if let Err(error) = socket_sender.send(Message::Text(json)).await {
             log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
             return;
           }
@@ -110,7 +110,7 @@ async fn handle_socket(
       }
     }
     log!("Closing connection: {socket_id}...");
-    if let Err(error) = socker_sender
+    if let Err(error) = socket_sender
       .send(Message::Close(Some(CloseFrame {
         code: close_code::NORMAL,
         reason: Cow::from("Goodbye"),
