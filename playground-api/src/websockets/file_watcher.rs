@@ -9,7 +9,7 @@ use crate::{
   log,
 };
 
-use super::channel::{SendError, Sender, SocketEvent};
+use super::channel::{EventMessage, EventSendError, EventSender};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileChange {
@@ -21,7 +21,7 @@ pub struct FileChange {
 pub struct FileWatcher(JoinHandle<u32>);
 
 impl FileWatcher {
-  pub fn new(sender: Sender) -> Self {
+  pub fn new(sender: EventSender) -> Self {
     let listener_task = tokio::spawn(async move {
       match Self::listen(&sender).await {
         Err(error) => {
@@ -34,7 +34,7 @@ impl FileWatcher {
     FileWatcher(listener_task)
   }
 
-  pub async fn listen(sender: &Sender) -> FileWatcherResult<u32> {
+  pub async fn listen(sender: &EventSender) -> FileWatcherResult<u32> {
     log!(info@"Listening for user files changes");
     let mut change_stream = DATABASE.watch::<UserFile>().await?;
     let mut sent_msg_count = 0;
@@ -50,7 +50,7 @@ impl FileWatcher {
           .unwrap_or_default();
 
         log!(info@"File changed sending message...");
-        sender.send(SocketEvent::FileChange(FileChange {
+        sender.send(EventMessage::FileChange(FileChange {
           user_id: file_change.user_id,
           folder_id: file_change.folder_id,
           files,
@@ -65,7 +65,7 @@ impl FileWatcher {
 #[derive(Error, Debug)]
 pub enum FileWatcherError {
   #[error("Error sending event message: {0}")]
-  Json(#[from] SendError),
+  Json(#[from] EventSendError),
   #[error("Database error when watching files: {0}")]
   Database(#[from] DBError),
 }

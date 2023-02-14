@@ -24,22 +24,22 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use thiserror::Error;
 
 use self::{
-  channel::{Sender, SocketChannel, SocketEvent},
+  channel::{EventChannel, EventMessage, EventSender},
   file_watcher::FileWatcher,
 };
 
 #[derive(Debug, Clone)]
 pub struct WebSocketState {
-  channel_sender: Sender,
+  event_sender: EventSender,
 }
 
 pub fn api() -> Router {
-  let socket_channel = SocketChannel::new();
-  FileWatcher::new(socket_channel.sender.clone());
+  let event_channel = EventChannel::new();
+  FileWatcher::new(event_channel.sender.clone());
   Router::new()
     .route("/", get(ws_handler))
     .with_state(WebSocketState {
-      channel_sender: socket_channel.sender,
+      event_sender: event_channel.sender,
     })
 }
 
@@ -63,7 +63,7 @@ async fn ws_handler(
   log!(success@"`{user_agent}` at {addr} connected.");
 
   ws.on_upgrade(move |socket| {
-    handle_socket(socket, addr, session.user_id, state.channel_sender)
+    handle_socket(socket, addr, session.user_id, state.event_sender)
   })
 }
 
@@ -72,7 +72,7 @@ async fn handle_socket(
   mut socket: WebSocket,
   socket_id: SocketAddr,
   user_id: String,
-  channel_sender: Sender,
+  event_sender: EventSender,
 ) {
   if let Err(error) = socket.send(Message::Ping(vec![1, 2, 3])).await {
     log!(err@"Could not send ping to {socket_id}.\n\nError: {error}");
@@ -84,20 +84,20 @@ async fn handle_socket(
   let (mut socket_sender, mut socket_receiver) = socket.split();
 
   // Task to notify the client of any updates in the files collection
-  let mut channel_receiver = channel_sender.subscribe();
+  let mut event_receiver = event_sender.subscribe();
   let event_user_id = user_id.clone();
   let mut send_task = tokio::spawn(async move {
-    while let Ok(event) = channel_receiver.recv().await {
+    while let Ok(event) = event_receiver.recv().await {
       match event {
-        SocketEvent::Exit(user_id) if user_id == event_user_id => {
-          log!(info@"Files listener task received exit signal, exiting...");
-          return;
-        }
-        SocketEvent::Exit(user_id) => {
+        EventMessage::Exit(user_id) => {
+          if user_id == event_user_id {
+            log!(info@"Files listener task received exit signal, exiting...");
+            return;
+          }
           log!(info@"Exit received for {user_id} but id is {event_user_id} so we ignore");
           continue;
         }
-        SocketEvent::FileChange(change) => {
+        EventMessage::FileChange(change) => {
           if change.user_id != event_user_id {
             continue;
           }
@@ -146,7 +146,7 @@ async fn handle_socket(
         Ok(b) => log!(success@"Received {b} messages"),
         Err(b) => log!(err@"Error receiving messages {b:?}")
       }
-      if let Err(error) = channel_sender.send(SocketEvent::Exit(user_id)) {
+      if let Err(error) = event_sender.send(EventMessage::Exit(user_id)) {
         log!(err@"Error sending exit from message receiver task\n\nError:{error}");
       }
     }
