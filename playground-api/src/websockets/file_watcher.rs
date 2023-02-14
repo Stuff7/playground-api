@@ -49,13 +49,17 @@ impl FileWatcher {
           .await
           .unwrap_or_default();
 
-        log!(info@"File changed sending message...");
-        sender.send(EventMessage::FileChange(FileChange {
-          user_id: file_change.user_id,
-          folder_id: file_change.folder_id,
-          files,
-        }))?;
-        sent_msg_count += 1;
+        if sender.receiver_count() != 0 {
+          log!(info@"File changed. Sending message...");
+          sender.send(EventMessage::FileChange(FileChange {
+            user_id: file_change.user_id,
+            folder_id: file_change.folder_id,
+            files,
+          }))?;
+          sent_msg_count += 1;
+        } else {
+          log!(info@"File changed but no one's listening. Message will not be sent");
+        }
       }
     }
     Ok(sent_msg_count)

@@ -1,7 +1,10 @@
 mod channel;
 mod file_watcher;
 
-use crate::{auth::session::SessionQuery, console::Colorize, db::DBError, log};
+use crate::{
+  auth::session::SessionQuery, console::Colorize, db::DBError, log,
+  websockets::channel::SocketMessage,
+};
 
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -24,7 +27,10 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use thiserror::Error;
 
 use self::{
-  channel::{EventChannel, EventMessage, EventSender},
+  channel::{
+    EventChannel, EventMessage, EventReceiver, EventSender, SocketChannel,
+    SocketSender,
+  },
   file_watcher::FileWatcher,
 };
 
@@ -75,57 +81,75 @@ async fn handle_socket(
   event_sender: EventSender,
 ) {
   if let Err(error) = socket.send(Message::Ping(vec![1, 2, 3])).await {
-    log!(err@"Could not send ping to {socket_id}.\n\nError: {error}");
+    log!(err@">>> {socket_id} Ping send failed.\n\nError: {error}");
     return;
   }
 
-  log!(success@"Pinged {socket_id}...");
+  log!(success@">>> {socket_id} Ping sent");
 
-  let (mut socket_sender, mut socket_receiver) = socket.split();
+  let (mut raw_socket_sender, mut raw_socket_receiver) = socket.split();
 
   // Task to notify the client of any updates in the files collection
-  let mut event_receiver = event_sender.subscribe();
-  let event_user_id = user_id.clone();
+  let socket_channel = SocketChannel::new();
+  let mut socket_receiver = socket_channel.sender.subscribe();
   let mut send_task = tokio::spawn(async move {
-    while let Ok(event) = event_receiver.recv().await {
+    while let Ok(event) = socket_receiver.recv().await {
       match event {
-        EventMessage::Exit(user_id) => {
-          if user_id == event_user_id {
-            log!(info@"Files listener task received exit signal, exiting...");
-            return;
-          }
-          log!(info@"Exit received for {user_id} but id is {event_user_id} so we ignore");
-          continue;
+        SocketMessage::Exit => {
+          log!(info@">>> {socket_id} Main socket task received exit signal, exiting...");
+          return;
         }
-        EventMessage::FileChange(change) => {
-          if change.user_id != event_user_id {
-            continue;
-          }
-          let Ok(json) = serde_json::to_string(&change) else {return};
-          if let Err(error) = socket_sender.send(Message::Text(json)).await {
-            log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
+        SocketMessage::Message(message) => {
+          if let Err(error) = raw_socket_sender.send(message).await {
+            log!(err@">>> {socket_id} Could not send server message.\n\nError: {error}");
             return;
           }
         }
       }
     }
-    log!("Closing connection: {socket_id}...");
-    if let Err(error) = socket_sender
+    log!(">>> {socket_id} Closing connection...");
+    if let Err(error) = raw_socket_sender
       .send(Message::Close(Some(CloseFrame {
         code: close_code::NORMAL,
         reason: Cow::from("Goodbye"),
       })))
       .await
     {
-      log!(err@"Could not close connection {socket_id}: {error}");
+      log!(err@">>> {socket_id} Could not close connection Error: {error}");
     }
   });
 
+  let socket_sender = socket_channel.sender.clone();
   // Task to receive messages from the client and log them to the console
   let mut recv_task = tokio::spawn(async move {
     let mut count = 0;
-    while let Some(Ok(msg)) = socket_receiver.next().await {
+    while let Some(Ok(msg)) = raw_socket_receiver.next().await {
       count += 1;
+      if let Message::Text(message) = msg.clone() {
+        if message == "event:add:file-change" {
+          let mut socket_sender = socket_channel.sender.clone();
+          let mut event_receiver = event_sender.subscribe();
+          let user_id = user_id.clone();
+          let socket_id = socket_id.to_string();
+          log!(">>> {socket_id} ADDING FILE-CHANGE EVENT FOR {user_id:?}");
+          tokio::spawn(async move {
+            file_change_event_dispatcher(
+              &mut socket_sender,
+              &mut event_receiver,
+              &user_id,
+              &socket_id,
+            )
+            .await;
+          });
+        } else if message == "event:remove:file-change" {
+          log!(">>> {socket_id} REMOVING FILE-CHANGE EVENT FOR {user_id:?}");
+          if let Err(error) =
+            event_sender.send(EventMessage::Exit(user_id.clone()))
+          {
+            log!(">>> {socket_id} FAILED TO REMOVE FILE-CHANGE EVENT FOR {user_id:?}\n\nError: {error}");
+          }
+        }
+      }
       if process_message(msg, socket_id).is_break() {
         break;
       }
@@ -137,17 +161,17 @@ async fn handle_socket(
   tokio::select! {
     rv_a = (&mut send_task) => {
       match rv_a {
-        Ok(_) => log!(success@"Sent messages to {socket_id}"),
-        Err(a) => log!(err@"Error sending messages {a:?}")
+        Ok(_) => log!(success@">>> {socket_id} Sent messages to {socket_id}"),
+        Err(a) => log!(err@">>> {socket_id} Error sending messages {a:?}")
       }
     },
     rv_b = (&mut recv_task) => {
       match rv_b {
-        Ok(b) => log!(success@"Received {b} messages"),
-        Err(b) => log!(err@"Error receiving messages {b:?}")
+        Ok(b) => log!(success@">>> {socket_id} Received {b} messages"),
+        Err(b) => log!(err@">>> {socket_id} Error receiving messages {b:?}")
       }
-      if let Err(error) = event_sender.send(EventMessage::Exit(user_id)) {
-        log!(err@"Error sending exit from message receiver task\n\nError:{error}");
+      if let Err(error) = socket_sender.send(SocketMessage::Exit) {
+        log!(err@">>> {socket_id} Error sending exit from message receiver task\n\nError:{error}");
       }
     }
   }
@@ -186,6 +210,46 @@ fn process_message(msg: Message, socket_id: SocketAddr) -> ControlFlow<(), ()> {
     }
   }
   ControlFlow::Continue(())
+}
+
+async fn file_change_event_dispatcher(
+  socket_sender: &mut SocketSender,
+  event_receiver: &mut EventReceiver,
+  user_id: &str,
+  socket_id: &str,
+) {
+  while let Ok(event) = event_receiver.recv().await {
+    match event {
+      EventMessage::Exit(id) => {
+        if id == user_id {
+          log!(info@">>> {socket_id} file-change event received exit signal for {user_id:?}, exiting...");
+          return;
+        }
+        log!(info@">>> {socket_id} file-change event received exit for {id} but id is {user_id} so we ignore");
+        continue;
+      }
+      EventMessage::FileChange(change) => {
+        if change.user_id != user_id {
+          continue;
+        }
+        let Ok(json) = serde_json::to_string(&change) else {return};
+        let message = SocketMessage::Message(Message::Text(json));
+        if let Err(error) = socket_sender.send(message) {
+          log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
+          return;
+        }
+      }
+    }
+  }
+  log!("Closing connection: {socket_id}...");
+  let close_message =
+    SocketMessage::Message(Message::Close(Some(CloseFrame {
+      code: close_code::NORMAL,
+      reason: Cow::from("Goodbye"),
+    })));
+  if let Err(error) = socket_sender.send(close_message) {
+    log!(err@"Could not close connection {socket_id}: {error}");
+  }
 }
 
 #[derive(Error, Debug)]

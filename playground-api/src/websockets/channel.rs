@@ -1,14 +1,15 @@
 use super::file_watcher::FileChange;
 
+use axum::extract::ws::Message;
 use tokio::sync::broadcast;
 
 #[derive(Debug)]
-pub struct EventChannel {
-  pub sender: EventSender,
-  pub receiver: EventReceiver,
+pub struct BroadcastChannel<T: Clone> {
+  pub sender: broadcast::Sender<T>,
+  pub receiver: broadcast::Receiver<T>,
 }
 
-impl EventChannel {
+impl<T: Clone> BroadcastChannel<T> {
   pub fn new() -> Self {
     let (sender, receiver) = broadcast::channel(16);
     Self { sender, receiver }
@@ -21,6 +22,16 @@ pub enum EventMessage {
   Exit(String),
 }
 
+#[derive(Debug, Clone)]
+pub enum SocketMessage {
+  Message(Message),
+  Exit,
+}
+
+pub type EventChannel = BroadcastChannel<EventMessage>;
 pub type EventReceiver = broadcast::Receiver<EventMessage>;
 pub type EventSender = broadcast::Sender<EventMessage>;
 pub type EventSendError = broadcast::error::SendError<EventMessage>;
+
+pub type SocketChannel = BroadcastChannel<SocketMessage>;
+pub type SocketSender = broadcast::Sender<SocketMessage>;
