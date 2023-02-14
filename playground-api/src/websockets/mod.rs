@@ -30,7 +30,7 @@ use self::{
 
 #[derive(Debug, Clone)]
 pub struct WebSocketState {
-  sender: Sender,
+  channel_sender: Sender,
 }
 
 pub fn api() -> Router {
@@ -39,7 +39,7 @@ pub fn api() -> Router {
   Router::new()
     .route("/", get(ws_handler))
     .with_state(WebSocketState {
-      sender: socket_channel.sender,
+      channel_sender: socket_channel.sender,
     })
 }
 
@@ -63,31 +63,31 @@ async fn ws_handler(
   log!(success@"`{user_agent}` at {addr} connected.");
 
   ws.on_upgrade(move |socket| {
-    handle_socket(socket, addr, session.user_id, state.sender)
+    handle_socket(socket, addr, session.user_id, state.channel_sender)
   })
 }
 
 /// WebSocket state machine (one will be spawned per connection)
 async fn handle_socket(
   mut socket: WebSocket,
-  who: SocketAddr,
+  socket_id: SocketAddr,
   user_id: String,
-  socket_sender: Sender,
+  channel_sender: Sender,
 ) {
   if let Err(error) = socket.send(Message::Ping(vec![1, 2, 3])).await {
-    log!(err@"Could not send ping to {who}.\n\nError: {error}");
+    log!(err@"Could not send ping to {socket_id}.\n\nError: {error}");
     return;
   }
 
-  log!(success@"Pinged {who}...");
+  log!(success@"Pinged {socket_id}...");
 
-  let (mut sender, mut receiver) = socket.split();
+  let (mut socker_sender, mut socket_receiver) = socket.split();
 
   // Task to notify the client of any updates in the files collection
-  let mut socket_receiver = socket_sender.subscribe();
+  let mut channel_receiver = channel_sender.subscribe();
   let event_user_id = user_id.clone();
   let mut send_task = tokio::spawn(async move {
-    while let Ok(event) = socket_receiver.recv().await {
+    while let Ok(event) = channel_receiver.recv().await {
       match event {
         SocketEvent::Exit(user_id) if user_id == event_user_id => {
           log!(info@"Files listener task received exit signal, exiting...");
@@ -102,31 +102,31 @@ async fn handle_socket(
             continue;
           }
           let Ok(json) = serde_json::to_string(&change) else {return};
-          if let Err(error) = sender.send(Message::Text(json)).await {
+          if let Err(error) = socker_sender.send(Message::Text(json)).await {
             log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
             return;
           }
         }
       }
     }
-    log!("Closing connection: {who}...");
-    if let Err(error) = sender
+    log!("Closing connection: {socket_id}...");
+    if let Err(error) = socker_sender
       .send(Message::Close(Some(CloseFrame {
         code: close_code::NORMAL,
         reason: Cow::from("Goodbye"),
       })))
       .await
     {
-      log!(err@"Could not close connection {who}: {error}");
+      log!(err@"Could not close connection {socket_id}: {error}");
     }
   });
 
   // Task to receive messages from the client and log them to the console
   let mut recv_task = tokio::spawn(async move {
     let mut count = 0;
-    while let Some(Ok(msg)) = receiver.next().await {
+    while let Some(Ok(msg)) = socket_receiver.next().await {
       count += 1;
-      if process_message(msg, who).is_break() {
+      if process_message(msg, socket_id).is_break() {
         break;
       }
     }
@@ -137,7 +137,7 @@ async fn handle_socket(
   tokio::select! {
     rv_a = (&mut send_task) => {
       match rv_a {
-        Ok(_) => log!(success@"Sent messages to {who}"),
+        Ok(_) => log!(success@"Sent messages to {socket_id}"),
         Err(a) => log!(err@"Error sending messages {a:?}")
       }
     },
@@ -146,43 +146,43 @@ async fn handle_socket(
         Ok(b) => log!(success@"Received {b} messages"),
         Err(b) => log!(err@"Error receiving messages {b:?}")
       }
-      if let Err(error) = socket_sender.send(SocketEvent::Exit(user_id)) {
+      if let Err(error) = channel_sender.send(SocketEvent::Exit(user_id)) {
         log!(err@"Error sending exit from message receiver task\n\nError:{error}");
       }
     }
   }
 
   // Returning from the handler closes the websocket connection
-  log!(success@"Websocket context {who} destroyed");
+  log!(success@"Websocket context {socket_id} destroyed");
 }
 
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+fn process_message(msg: Message, socket_id: SocketAddr) -> ControlFlow<(), ()> {
   match msg {
     Message::Text(t) => {
-      log!(">>> {who} sent str: {t:?}");
+      log!(">>> {socket_id} sent str: {t:?}");
     }
     Message::Binary(d) => {
-      log!(">>> {who} sent {} bytes: {d:?}", d.len());
+      log!(">>> {socket_id} sent {} bytes: {d:?}", d.len());
     }
     Message::Close(c) => {
       if let Some(cf) = c {
         log!(
-          ">>> {who} sent close with code {} and reason `{}`",
+          ">>> {socket_id} sent close with code {} and reason `{}`",
           cf.code,
           cf.reason
         );
       } else {
-        log!(">>> {who} somehow sent close message without CloseFrame");
+        log!(">>> {socket_id} somehow sent close message without CloseFrame");
       }
       return ControlFlow::Break(());
     }
 
     Message::Pong(v) => {
-      log!(">>> {who} sent pong with {v:?}");
+      log!(">>> {socket_id} sent pong with {v:?}");
     }
     // No need to manually handle Message::Ping. But we can access the pings content here.
     Message::Ping(v) => {
-      log!(">>> {who} sent ping with {v:?}");
+      log!(">>> {socket_id} sent ping with {v:?}");
     }
   }
   ControlFlow::Continue(())

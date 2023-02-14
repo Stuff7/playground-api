@@ -27,8 +27,10 @@ use tower_http::cors::CorsLayer;
 #[tokio::main]
 async fn main() {
   db::init().await;
-  let auth_routes = auth::api().unwrap_or_exit("Could not initialize auth routes.");
-  let files_api = routes::files::api().unwrap_or_exit("Could not initialize video API.");
+  let auth_routes =
+    auth::api().unwrap_or_exit("Could not initialize auth routes.");
+  let files_api =
+    routes::files::api().unwrap_or_exit("Could not initialize video API.");
 
   let cors = CorsLayer::new()
     .allow_methods(tower_http::cors::Any)
@@ -38,7 +40,9 @@ async fn main() {
       .split(',')
       .map(|origin| origin.parse::<HeaderValue>())
       .collect::<Result<Vec<_>, _>>()
-      .unwrap_or_exit(f!("Could not parse allowed origins {allowed_origins:?}"));
+      .unwrap_or_exit(f!(
+        "Could not parse allowed origins {allowed_origins:?}"
+      ));
     cors.allow_origin(origins)
   } else {
     cors
@@ -66,7 +70,9 @@ async fn main() {
     .unwrap_or_exit("Failed to start server");
 }
 
-async fn logout(TypedHeader(bearer): TypedHeader<Authorization<Bearer>>) -> StatusCode {
+async fn logout(
+  TypedHeader(bearer): TypedHeader<Authorization<Bearer>>,
+) -> StatusCode {
   Session::invalidate(bearer.token()).await;
   StatusCode::NO_CONTENT
 }
