@@ -1,4 +1,4 @@
-use super::file_watcher::FileChange;
+use super::{event::EventExitRequest, file_watcher::FileChange};
 
 use axum::extract::ws::Message;
 use tokio::sync::broadcast;
@@ -19,7 +19,7 @@ impl<T: Clone> BroadcastChannel<T> {
 #[derive(Debug, Clone)]
 pub enum EventMessage {
   FileChange(FileChange),
-  Exit(String),
+  Exit(EventExitRequest),
 }
 
 #[derive(Debug, Clone)]
@@ -34,4 +34,5 @@ pub type EventSender = broadcast::Sender<EventMessage>;
 pub type EventSendError = broadcast::error::SendError<EventMessage>;
 
 pub type SocketChannel = BroadcastChannel<SocketMessage>;
+pub type SocketReceiver = broadcast::Receiver<SocketMessage>;
 pub type SocketSender = broadcast::Sender<SocketMessage>;

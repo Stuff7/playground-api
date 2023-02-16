@@ -1,4 +1,5 @@
 mod channel;
+mod event;
 mod file_watcher;
 
 use crate::{
@@ -14,23 +15,26 @@ use axum::{
   extract::{
     connect_info::ConnectInfo,
     ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade},
-    State, TypedHeader,
+    State,
   },
-  headers,
   response::IntoResponse,
   routing::get,
   Router,
 };
 
-use futures::{sink::SinkExt, stream::StreamExt};
+use futures::{
+  sink::SinkExt,
+  stream::{SplitSink, SplitStream, StreamExt},
+};
 
 use thiserror::Error;
+use tokio::task::JoinHandle;
 
 use self::{
   channel::{
-    EventChannel, EventMessage, EventReceiver, EventSender, SocketChannel,
-    SocketSender,
+    EventChannel, EventSender, SocketChannel, SocketReceiver, SocketSender,
   },
+  event::EventManager,
   file_watcher::FileWatcher,
 };
 
@@ -56,58 +60,128 @@ pub fn api() -> Router {
 /// as well as things from HTTP headers such as user-agent of the browser etc.
 async fn ws_handler(
   ws: WebSocketUpgrade,
-  user_agent: Option<TypedHeader<headers::UserAgent>>,
   SessionQuery(session): SessionQuery,
-  ConnectInfo(addr): ConnectInfo<SocketAddr>,
+  ConnectInfo(socket_id): ConnectInfo<SocketAddr>,
   State(state): State<WebSocketState>,
 ) -> impl IntoResponse {
-  let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
-    user_agent.to_string()
-  } else {
-    String::from("Unknown browser")
-  };
-  log!(success@"`{user_agent}` at {addr} connected.");
+  log!(info@">>> {socket_id} Requested connection");
 
   ws.on_upgrade(move |socket| {
-    handle_socket(socket, addr, session.user_id, state.event_sender)
+    handle_socket(
+      socket,
+      socket_id.to_string(),
+      session.user_id,
+      state.event_sender,
+    )
   })
 }
 
 /// WebSocket state machine (one will be spawned per connection)
 async fn handle_socket(
   mut socket: WebSocket,
-  socket_id: SocketAddr,
+  socket_id: String,
   user_id: String,
   event_sender: EventSender,
 ) {
   if let Err(error) = socket.send(Message::Ping(vec![1, 2, 3])).await {
-    log!(err@">>> {socket_id} Ping send failed.\n\nError: {error}");
+    log!(err@">>> {socket_id} Ping send failed: {error}");
     return;
   }
 
-  log!(success@">>> {socket_id} Ping sent");
-
-  let (mut raw_socket_sender, mut raw_socket_receiver) = socket.split();
-
-  // Task to notify the client of any updates in the files collection
+  log!(success@">>> {socket_id} Connected");
+  let (raw_socket_sender, raw_socket_receiver) = socket.split();
   let socket_channel = SocketChannel::new();
-  let mut socket_receiver = socket_channel.sender.subscribe();
-  let mut send_task = tokio::spawn(async move {
+  let socket_receiver = socket_channel.sender.subscribe();
+
+  let mut send_task = send_client_messages_task(
+    socket_receiver,
+    socket_id.clone(),
+    raw_socket_sender,
+  );
+
+  let mut recv_task = receive_client_messages_task(
+    raw_socket_receiver,
+    socket_channel.sender.clone(),
+    event_sender,
+    user_id,
+    socket_id.clone(),
+  );
+
+  // If any one of the tasks exits, send a signal to the other to exit too.
+  tokio::select! {
+    rv_a = (&mut send_task) => {
+      match rv_a {
+        Ok(count) => log!(success@">>> {socket_id} Messages sent: {count}"),
+        Err(error) => log!(err@">>> {socket_id} Error sending messages: {error:?}")
+      }
+    },
+    rv_b = (&mut recv_task) => {
+      match rv_b {
+        Ok(count) => log!(success@">>> {socket_id} Messages received: {count}"),
+        Err(error) => log!(err@">>> {socket_id} Error receiving messages: {error:?}")
+      }
+      if let Err(error) = socket_channel.sender.send(SocketMessage::Exit) {
+        log!(err@">>> {socket_id} Error sending exit from message receiver task: {error}");
+      }
+    }
+  }
+
+  // Returning from the handler closes the websocket connection
+  log!(success@">>> {socket_id} Websocket context destroyed");
+}
+
+fn receive_client_messages_task(
+  mut raw_socket_receiver: SplitStream<WebSocket>,
+  socket_sender: SocketSender,
+  event_sender: EventSender,
+  user_id: String,
+  socket_id: String,
+) -> JoinHandle<i32> {
+  tokio::spawn(async move {
+    let mut event_manager = EventManager::default();
+    let mut count = 0;
+    while let Some(Ok(msg)) = raw_socket_receiver.next().await {
+      count += 1;
+      if process_message(&msg, &socket_id).is_break() {
+        break;
+      }
+      if let Message::Text(ref message) = msg {
+        event_manager.process_event(
+          message,
+          &socket_sender,
+          &event_sender,
+          user_id.clone(),
+          socket_id.clone(),
+        );
+      }
+    }
+    count
+  })
+}
+
+fn send_client_messages_task(
+  mut socket_receiver: SocketReceiver,
+  socket_id: String,
+  mut raw_socket_sender: SplitSink<WebSocket, Message>,
+) -> JoinHandle<i32> {
+  tokio::spawn(async move {
+    let mut count = 0;
     while let Ok(event) = socket_receiver.recv().await {
       match event {
         SocketMessage::Exit => {
           log!(info@">>> {socket_id} Main socket task received exit signal, exiting...");
-          return;
+          return count;
         }
         SocketMessage::Message(message) => {
           if let Err(error) = raw_socket_sender.send(message).await {
-            log!(err@">>> {socket_id} Could not send server message.\n\nError: {error}");
-            return;
+            log!(err@">>> {socket_id} Could not send server message: {error}");
+            break;
           }
+          count += 1;
         }
       }
     }
-    log!(">>> {socket_id} Closing connection...");
+    log!(info@">>> {socket_id} Closing connection...");
     if let Err(error) = raw_socket_sender
       .send(Message::Close(Some(CloseFrame {
         code: close_code::NORMAL,
@@ -115,72 +189,13 @@ async fn handle_socket(
       })))
       .await
     {
-      log!(err@">>> {socket_id} Could not close connection Error: {error}");
-    }
-  });
-
-  let socket_sender = socket_channel.sender.clone();
-  // Task to receive messages from the client and log them to the console
-  let mut recv_task = tokio::spawn(async move {
-    let mut count = 0;
-    while let Some(Ok(msg)) = raw_socket_receiver.next().await {
-      count += 1;
-      if let Message::Text(message) = msg.clone() {
-        if message == "event:add:file-change" {
-          let mut socket_sender = socket_channel.sender.clone();
-          let mut event_receiver = event_sender.subscribe();
-          let user_id = user_id.clone();
-          let socket_id = socket_id.to_string();
-          log!(">>> {socket_id} ADDING FILE-CHANGE EVENT FOR {user_id:?}");
-          tokio::spawn(async move {
-            file_change_event_dispatcher(
-              &mut socket_sender,
-              &mut event_receiver,
-              &user_id,
-              &socket_id,
-            )
-            .await;
-          });
-        } else if message == "event:remove:file-change" {
-          log!(">>> {socket_id} REMOVING FILE-CHANGE EVENT FOR {user_id:?}");
-          if let Err(error) =
-            event_sender.send(EventMessage::Exit(user_id.clone()))
-          {
-            log!(">>> {socket_id} FAILED TO REMOVE FILE-CHANGE EVENT FOR {user_id:?}\n\nError: {error}");
-          }
-        }
-      }
-      if process_message(msg, socket_id).is_break() {
-        break;
-      }
+      log!(err@">>> {socket_id} Could not close connection: {error}");
     }
     count
-  });
-
-  // If any one of the tasks exits, send a signal to the other to exit too.
-  tokio::select! {
-    rv_a = (&mut send_task) => {
-      match rv_a {
-        Ok(_) => log!(success@">>> {socket_id} Sent messages to {socket_id}"),
-        Err(a) => log!(err@">>> {socket_id} Error sending messages {a:?}")
-      }
-    },
-    rv_b = (&mut recv_task) => {
-      match rv_b {
-        Ok(b) => log!(success@">>> {socket_id} Received {b} messages"),
-        Err(b) => log!(err@">>> {socket_id} Error receiving messages {b:?}")
-      }
-      if let Err(error) = socket_sender.send(SocketMessage::Exit) {
-        log!(err@">>> {socket_id} Error sending exit from message receiver task\n\nError:{error}");
-      }
-    }
-  }
-
-  // Returning from the handler closes the websocket connection
-  log!(success@"Websocket context {socket_id} destroyed");
+  })
 }
 
-fn process_message(msg: Message, socket_id: SocketAddr) -> ControlFlow<(), ()> {
+fn process_message(msg: &Message, socket_id: &str) -> ControlFlow<(), ()> {
   match msg {
     Message::Text(t) => {
       log!(">>> {socket_id} sent str: {t:?}");
@@ -210,46 +225,6 @@ fn process_message(msg: Message, socket_id: SocketAddr) -> ControlFlow<(), ()> {
     }
   }
   ControlFlow::Continue(())
-}
-
-async fn file_change_event_dispatcher(
-  socket_sender: &mut SocketSender,
-  event_receiver: &mut EventReceiver,
-  user_id: &str,
-  socket_id: &str,
-) {
-  while let Ok(event) = event_receiver.recv().await {
-    match event {
-      EventMessage::Exit(id) => {
-        if id == user_id {
-          log!(info@">>> {socket_id} file-change event received exit signal for {user_id:?}, exiting...");
-          return;
-        }
-        log!(info@">>> {socket_id} file-change event received exit for {id} but id is {user_id} so we ignore");
-        continue;
-      }
-      EventMessage::FileChange(change) => {
-        if change.user_id != user_id {
-          continue;
-        }
-        let Ok(json) = serde_json::to_string(&change) else {return};
-        let message = SocketMessage::Message(Message::Text(json));
-        if let Err(error) = socket_sender.send(message) {
-          log!(err@"Could not send server message {change:#?}.\n\nError: {error}");
-          return;
-        }
-      }
-    }
-  }
-  log!("Closing connection: {socket_id}...");
-  let close_message =
-    SocketMessage::Message(Message::Close(Some(CloseFrame {
-      code: close_code::NORMAL,
-      reason: Cow::from("Goodbye"),
-    })));
-  if let Err(error) = socket_sender.send(close_message) {
-    log!(err@"Could not close connection {socket_id}: {error}");
-  }
 }
 
 #[derive(Error, Debug)]

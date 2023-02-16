@@ -60,9 +60,9 @@ impl<'a> Colorize for &'a str {}
 
 #[macro_export]
 macro_rules! log {
-  ( $fn: ident @ $( $x: expr ),* ) => {
+  ( $($fn: ident).* @ $( $x: expr ),* ) => {
     {
-      println!("{}", format!($($x),*).$fn());
+      println!("{}", format!($($x),*).$($fn()).*);
     }
   };
   ( $( $x: expr ),* ) => {
