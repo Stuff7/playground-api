@@ -12,8 +12,9 @@ use mongodb::{
   bson::{self, doc, to_document, Document},
   change_stream::{event::ChangeStreamEvent, ChangeStream},
   options::{
-    ChangeStreamOptions, ClientOptions, FindOneAndUpdateOptions, FullDocumentType, ReplaceOptions,
-    ResolverConfig, ReturnDocument, UpdateOptions,
+    ChangeStreamOptions, ClientOptions, FindOneAndUpdateOptions,
+    FullDocumentType, ReplaceOptions, ResolverConfig, ReturnDocument,
+    UpdateOptions,
   },
   results::UpdateResult,
   Client,
@@ -39,8 +40,8 @@ pub async fn init() {
   .await
   .unwrap_or_exit("Could not parse MongoDB URI");
 
-  let client =
-    Client::with_options(client_options).unwrap_or_exit("Could not initialize MongoDB client");
+  let client = Client::with_options(client_options)
+    .unwrap_or_exit("Could not initialize MongoDB client");
 
   DATABASE_RESULT
     .set(Database(client.database("playground")))
@@ -103,7 +104,10 @@ pub async fn save_file(file: &UserFile) -> DBResult<Option<&UserFile>> {
 pub struct Database(mongodb::Database);
 
 impl Database {
-  pub async fn find_many<T: Collection>(&self, query: Document) -> DBResult<Vec<T>> {
+  pub async fn find_many<T: Collection>(
+    &self,
+    query: Document,
+  ) -> DBResult<Vec<T>> {
     let collection = self.collection::<T>();
     let mut cursor = collection.find(query, None).await?;
     let mut documents = Vec::new();
@@ -114,12 +118,18 @@ impl Database {
     Ok(documents)
   }
 
-  pub async fn find_by_id<T: Collection>(&self, id: &str) -> DBResult<Option<T>> {
+  pub async fn find_by_id<T: Collection>(
+    &self,
+    id: &str,
+  ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     Ok(collection.find_one(doc! { "_id": id }, None).await?)
   }
 
-  pub async fn delete<T: Collection>(&self, query: Document) -> DBResult<Option<T>> {
+  pub async fn delete<T: Collection>(
+    &self,
+    query: Document,
+  ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     Ok(collection.find_one_and_delete(query, None).await?)
   }
@@ -154,7 +164,11 @@ impl Database {
 
   /// Replace doc in collection or create it if it doesn't exist.
   #[allow(dead_code)]
-  pub async fn replace<T: Collection>(&self, doc: &T, query: Option<Document>) -> DBResult {
+  pub async fn replace<T: Collection>(
+    &self,
+    doc: &T,
+    query: Option<Document>,
+  ) -> DBResult {
     let collection = self.collection::<T>();
     let upsert = ReplaceOptions::builder().upsert(true).build();
     collection
@@ -185,11 +199,15 @@ impl Database {
     Ok(result.upserted_id.is_some().then_some(doc))
   }
 
-  pub async fn watch<T: Collection>(&self) -> DBResult<ChangeStream<ChangeStreamEvent<T>>> {
+  pub async fn watch<T: Collection>(
+    &self,
+  ) -> DBResult<ChangeStream<ChangeStreamEvent<T>>> {
     let collection = self.collection::<T>();
     let pipeline = vec![doc! {
       "$match": {
-        "operationType": "update"
+        "operationType": {
+          "$in": ["insert", "update", "delete"]
+        }
       }
     }];
     let options = ChangeStreamOptions::builder()
