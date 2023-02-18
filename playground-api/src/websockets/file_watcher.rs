@@ -42,11 +42,13 @@ impl FileWatcher {
 
     while let Some(result) = change_stream.next().await {
       if let Some(file_change) = result.map_err(DBError::from)?.full_document {
+        let mut query = UserFile::folder_query(
+          file_change.user_id.clone(),
+          Some(file_change.folder_id.clone()),
+        )?;
+        query.insert("archived", mongodb::bson::doc! { "$exists": false });
         let files = DATABASE
-          .find_many::<UserFile>(UserFile::folder_query(
-            file_change.user_id.clone(),
-            Some(file_change.folder_id.clone()),
-          )?)
+          .find_many::<UserFile>(query)
           .await
           .unwrap_or_default();
 
