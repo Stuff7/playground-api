@@ -139,6 +139,9 @@ impl Database {
     query: Document,
   ) -> DBResult<u64> {
     let collection = self.collection::<T>();
+    collection
+      .update_many(query.clone(), doc! { "$set": { "archived": true } }, None)
+      .await?;
     Ok(collection.delete_many(query, None).await?.deleted_count)
   }
 
