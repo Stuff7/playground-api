@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
   api::{APIError, APIResult},
   db, GracefulExit,
@@ -43,7 +45,9 @@ impl Session {
     let user_id = cache
       .contains(token)
       .then(|| jwt::verify_token(token).map(|token| token.claims.sub))
-      .ok_or_else(|| APIError::UnauthorizedMessage("Invalid session".to_string()))?
+      .ok_or_else(|| {
+        APIError::UnauthorizedMessage("Invalid session".to_string())
+      })?
       .map_err(|err| {
         cache.remove(token);
         APIError::from(err)
@@ -59,17 +63,23 @@ where
 {
   type Rejection = APIError;
 
-  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
     let bearer: Option<TypedHeader<Authorization<Bearer>>> = parts
       .extract()
       .await
       .unwrap_or_exit("Could not extract Authorization header");
 
-    let token = bearer
-      .map(|bearer| bearer.token().to_string())
-      .ok_or_else(|| {
-        APIError::UnauthorizedMessage("Missing/Invalid Authorization header".to_string())
-      })?;
+    let token =
+      bearer
+        .map(|bearer| bearer.token().to_string())
+        .ok_or_else(|| {
+          APIError::UnauthorizedMessage(
+            "Missing/Invalid Authorization header".to_string(),
+          )
+        })?;
 
     Ok(Self::from_token(&token).await?)
   }
@@ -89,7 +99,10 @@ where
 {
   type Rejection = APIError;
 
-  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
     let Query(query) = parts.extract::<Query<TokenQuery>>().await?;
     Ok(Self(Session::from_token(&query.token).await?))
   }
@@ -109,7 +122,10 @@ where
 {
   type Rejection = APIError;
 
-  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
     let session = parts.extract::<Session>().await?;
     let Query(query) = parts.extract::<Query<FolderId>>().await?;
 
@@ -117,6 +133,35 @@ where
       assert_valid_folder(&session.user_id, &query.folder).await?,
     ))
   }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileIdVec {
+  pub id: String,
+}
+
+pub struct FileIdVecQuery(pub HashSet<String>);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for FileIdVecQuery
+where
+  S: Send + Sync,
+{
+  type Rejection = APIError;
+
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
+    // TODO: error handling
+    let Query(query) = parts.extract::<Query<FileIdVec>>().await?;
+    Ok(Self(query.id.split(',').map(String::from).collect()))
+  }
+}
+
+#[derive(Deserialize)]
+pub struct FileIdPath {
+  pub file_id: String,
 }
 
 pub struct FileId(pub String);
@@ -128,8 +173,12 @@ where
 {
   type Rejection = APIError;
 
-  async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-    let Path(file_id) = parts.extract::<Path<String>>().await?;
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
+    let Path(FileIdPath { file_id }) =
+      parts.extract::<Path<FileIdPath>>().await?;
     Ok(Self(file_id))
   }
 }
@@ -145,7 +194,10 @@ where
 {
   type Rejection = APIError;
 
-  async fn from_request(mut req: Request<Body>, _: &S) -> Result<Self, Self::Rejection> {
+  async fn from_request(
+    mut req: Request<Body>,
+    _: &S,
+  ) -> Result<Self, Self::Rejection> {
     let session = req.extract_parts::<Session>().await?;
     let file_id = req.extract_parts::<FileId>().await;
     let Json(body) = req.extract::<Json<serde_json::Value>, _>().await?;
@@ -179,7 +231,9 @@ async fn assert_valid_folder(
     let folder = db::DATABASE
       .find_by_id::<db::UserFile>(folder_id)
       .await?
-      .ok_or_else(|| APIError::BadRequest(f!("Folder with id {folder_id:?} does not exist")))?;
+      .ok_or_else(|| {
+        APIError::BadRequest(f!("Folder with id {folder_id:?} does not exist"))
+      })?;
 
     if !matches!(folder.metadata, db::FileMetadata::Folder) {
       return Err(APIError::BadRequest(f!(

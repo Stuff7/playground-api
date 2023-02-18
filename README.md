@@ -210,12 +210,33 @@ Updated [`UserFile`](#UserFile)
 *Requires Bearer Authorization*
 
 ```
-DELETE /api/files/:file_id
+DELETE /api/files
 ```
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Value</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>id</td>
+      <td>string</td>
+      <td>Comma (,) separated list of file IDs to delete. Note that if the id corresponds to a folder, all the files in that folder will be deleted too</td>
+    </tr>
+  </tbody>
+</table>
 
 #### **Response**
 
-The deleted [`UserFile`](#UserFile)
+```typescript
+interface DeleteFilesResponse {
+  deleted: number, // The amount of deleted files
+}
+```
 
 </br>
 
@@ -307,7 +328,7 @@ GET /api/files/video/metadata
   </thead>
   <tbody>
     <tr>
-      <td>video_url</td>
+      <td>videoId</td>
       <td>string</td>
       <td>URL of the video (Only google drive supported).</td>
     </tr>

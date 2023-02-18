@@ -12,6 +12,7 @@ use crate::{
 use super::channel::{EventMessage, EventSendError, EventSender};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct FileChange {
   pub user_id: String,
   pub folder_id: String,

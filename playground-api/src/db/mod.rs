@@ -126,12 +126,20 @@ impl Database {
     Ok(collection.find_one(doc! { "_id": id }, None).await?)
   }
 
-  pub async fn delete<T: Collection>(
+  // pub async fn delete<T: Collection>(
+  //   &self,
+  //   query: Document,
+  // ) -> DBResult<Option<T>> {
+  //   let collection = self.collection::<T>();
+  //   Ok(collection.find_one_and_delete(query, None).await?)
+  // }
+
+  pub async fn delete_many<T: Collection>(
     &self,
     query: Document,
-  ) -> DBResult<Option<T>> {
+  ) -> DBResult<u64> {
     let collection = self.collection::<T>();
-    Ok(collection.find_one_and_delete(query, None).await?)
+    Ok(collection.delete_many(query, None).await?.deleted_count)
   }
 
   pub async fn update<T: Collection>(

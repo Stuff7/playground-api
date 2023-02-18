@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
   api::{self, APIError, APIResult},
-  auth::session::{FileId, FolderBody, FolderQuery, Session},
+  auth::session::{FileId, FileIdVecQuery, FolderBody, FolderQuery, Session},
   db,
   http::stream_video,
   AppResult,
@@ -36,8 +36,8 @@ pub fn api() -> AppResult<Router> {
   Ok(
     Router::new()
       .route("/", routing::get(get_files))
+      .route("/", routing::delete(delete_files))
       .route("/:file_id", routing::patch(update_file))
-      .route("/:file_id", routing::delete(delete_file))
       .route("/folder", routing::post(create_folder))
       .route("/folder/move", routing::put(move_files))
       .route("/video/metadata", routing::get(get_video_metadata))
@@ -53,7 +53,9 @@ pub async fn stream(
   State(request_client): State<reqwest::Client>,
 ) -> APIResult<impl IntoResponse> {
   stream_video(
-    &f!("https://drive.google.com/uc?export=download&confirm=yTib&id={video_id}"),
+    &f!(
+      "https://drive.google.com/uc?export=download&confirm=yTib&id={video_id}"
+    ),
     headers,
     &request_client,
   )
@@ -65,7 +67,10 @@ pub async fn get_files(
   FolderQuery(folder): FolderQuery,
 ) -> APIResult<Json<Vec<db::UserFile>>> {
   let files = db::DATABASE
-    .find_many::<db::UserFile>(db::UserFile::folder_query(session.user_id, folder)?)
+    .find_many::<db::UserFile>(db::UserFile::folder_query(
+      session.user_id,
+      folder,
+    )?)
     .await
     .unwrap_or_default();
   Ok(Json(files))
@@ -166,33 +171,60 @@ pub async fn update_file(
     db::DATABASE
       .update::<db::UserFile>(update, query)
       .await?
-      .ok_or_else(|| APIError::NotFound(f!("File with id {file_id:?} not found")))?,
+      .ok_or_else(|| {
+        APIError::NotFound(f!("File with id {file_id:?} not found"))
+      })?,
   ))
 }
 
-pub async fn delete_file(
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFilesResponse {
+  deleted: u64,
+}
+
+pub async fn delete_files(
   session: Session,
-  FileId(file_id): FileId,
-) -> APIResult<Json<db::UserFile>> {
-  Ok(Json(
-    db::DATABASE
-      .delete::<db::UserFile>(db::UserFile::user_query(file_id.clone(), session.user_id)?)
-      .await?
-      .ok_or_else(|| APIError::NotFound(f!("File with id {file_id:?} not found")))?,
-  ))
+  FileIdVecQuery(mut query): FileIdVecQuery,
+) -> APIResult<Json<DeleteFilesResponse>> {
+  query.remove(&session.user_id);
+  let filter = query
+    .into_iter()
+    .flat_map(|id| {
+      [
+        db::PartialUserFile {
+          folder_id: Some(id.clone()),
+          user_id: Some(session.user_id.clone()),
+          ..Default::default()
+        },
+        db::PartialUserFile {
+          id: Some(id),
+          user_id: Some(session.user_id.clone()),
+          ..Default::default()
+        },
+      ]
+    })
+    .collect::<Vec<_>>();
+
+  Ok(Json(DeleteFilesResponse {
+    deleted: db::DATABASE
+      .delete_many::<db::UserFile>(db::UserFile::query_many(&filter)?)
+      .await?,
+  }))
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetFileMetadataQuery {
-  file_url: String,
+  video_id: String,
 }
 
 pub async fn get_video_metadata(
   State(request_client): State<reqwest::Client>,
-  Query(GetFileMetadataQuery { file_url }): Query<GetFileMetadataQuery>,
+  Query(GetFileMetadataQuery { video_id }): Query<GetFileMetadataQuery>,
 ) -> APIResult<Json<db::Video>> {
   Ok(Json(
-    fetch_video_metadata(&request_client, &file_url).await?,
+    fetch_video_metadata(&request_client, &video_id).await?,
   ))
 }
 

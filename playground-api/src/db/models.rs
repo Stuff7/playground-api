@@ -9,10 +9,18 @@ use partial_struct::{partial, CamelFields};
 
 use super::DBResult;
 
-pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> =
+  Lazy::new(|| Mutex::new(HashSet::new()));
 
 pub trait Collection:
-  std::fmt::Debug + Serialize + DeserializeOwned + Unpin + Send + Sync + Clone + 'static
+  std::fmt::Debug
+  + Serialize
+  + DeserializeOwned
+  + Unpin
+  + Send
+  + Sync
+  + Clone
+  + 'static
 {
   fn collection_name() -> &'static str;
   fn id(&self) -> &str;
@@ -91,7 +99,11 @@ impl UserFile {
     })
   }
 
-  pub fn new_folder(user_id: String, name: String, folder_id: Option<String>) -> DBResult<Self> {
+  pub fn new_folder(
+    user_id: String,
+    name: String,
+    folder_id: Option<String>,
+  ) -> DBResult<Self> {
     Ok(Self {
       id: ObjectId::new().to_hex(),
       folder_id: folder_id.unwrap_or_else(|| user_id.clone()),
@@ -118,7 +130,10 @@ impl UserFile {
     Self::query(query)
   }
 
-  pub fn folder_query(user_id: String, folder_id: Option<String>) -> DBResult<Document> {
+  pub fn folder_query(
+    user_id: String,
+    folder_id: Option<String>,
+  ) -> DBResult<Document> {
     let mut query = doc! {
       UserFile::user_id(): user_id
     };
@@ -133,14 +148,20 @@ impl UserFile {
     Ok(query)
   }
 
-  pub fn update_query(name: Option<String>, folder_id: Option<String>) -> DBResult<Document> {
+  pub fn update_query(
+    name: Option<String>,
+    folder_id: Option<String>,
+  ) -> DBResult<Document> {
     let update = &mut PartialUserFile::default();
     update.name = name.map(NonEmptyString::try_from).transpose()?;
     update.folder_id = folder_id;
     Self::query(update)
   }
 
-  pub fn files_query(user_id: String, files: &HashSet<String>) -> DBResult<Document> {
+  pub fn files_query(
+    user_id: String,
+    files: &HashSet<String>,
+  ) -> DBResult<Document> {
     let query = &mut PartialUserFile::default();
     query.user_id = Some(user_id);
     let mut query = Self::query(query)?;
@@ -157,6 +178,10 @@ impl UserFile {
 
   pub fn query(user_file: &PartialUserFile) -> DBResult<Document> {
     Ok(to_document::<PartialUserFile>(user_file)?)
+  }
+
+  pub fn query_many(user_files: &Vec<PartialUserFile>) -> DBResult<Document> {
+    Ok(doc! { "$or": to_bson::<Vec<PartialUserFile>>(user_files)? })
   }
 }
 
