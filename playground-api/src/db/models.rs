@@ -209,7 +209,6 @@ impl UserFile {
           Self::collection_name(): 1
       }},
     ];
-    println!("PIPE => {pipeline:#?}");
     let changes = super::DATABASE
       .aggregate::<Self>(pipeline)
       .await?
