@@ -27,10 +27,12 @@ use tower_http::cors::CorsLayer;
 #[tokio::main]
 async fn main() {
   db::init().await;
+  let event_channel = websockets::channel::EventChannel::new();
   let auth_routes =
     auth::api().unwrap_or_exit("Could not initialize auth routes.");
-  let files_api =
-    routes::files::api().unwrap_or_exit("Could not initialize video API.");
+  let files_api = routes::files::api(event_channel.sender.clone())
+    .unwrap_or_exit("Could not initialize video API.");
+  let websockets_api = websockets::api(event_channel.sender);
 
   let cors = CorsLayer::new()
     .allow_methods(tower_http::cors::Any)
@@ -53,7 +55,7 @@ async fn main() {
     .nest("/auth", auth_routes)
     .nest("/api/users", routes::users::api())
     .nest("/api/files", files_api)
-    .nest("/ws", websockets::api())
+    .nest("/ws", websockets_api)
     .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
   auth::{jwt::JWTError, oauth::OAuthError},
   db::DBError,
+  websockets::channel::EventSendError,
 };
 
 #[derive(Error, Debug)]
@@ -52,6 +53,8 @@ pub enum APIError {
   Conflict(String),
   #[error("{0}")]
   NotFound(String),
+  #[error("Event send error: {0}")]
+  EventSend(#[from] EventSendError),
 }
 
 impl IntoResponse for APIError {
@@ -59,19 +62,24 @@ impl IntoResponse for APIError {
     let (status, body) = match self {
       Self::NotFound(_) => (StatusCode::NOT_FOUND, None),
       Self::Conflict(_) => (StatusCode::CONFLICT, None),
-      Self::BadRequest(_) | Self::BadQuery(_) | Self::BadPath(_) | Self::BadJson(_) => {
-        (StatusCode::BAD_REQUEST, None)
+      Self::BadRequest(_)
+      | Self::BadQuery(_)
+      | Self::BadPath(_)
+      | Self::BadJson(_) => (StatusCode::BAD_REQUEST, None),
+      Self::JsonParsing(ref data) => {
+        (StatusCode::NOT_ACCEPTABLE, Some(data.clone()))
       }
-      Self::JsonParsing(ref data) => (StatusCode::NOT_ACCEPTABLE, Some(data.clone())),
       Self::InvalidJson(_) => (StatusCode::NOT_ACCEPTABLE, None),
       Self::StatusCode(ref code, ref data) => (*code, data.clone()),
-      Self::Jwt(_) | Self::Unauthorized | Self::UnauthorizedMessage(_) | Self::OAuth(_) => {
-        (StatusCode::UNAUTHORIZED, None)
-      }
+      Self::Jwt(_)
+      | Self::Unauthorized
+      | Self::UnauthorizedMessage(_)
+      | Self::OAuth(_) => (StatusCode::UNAUTHORIZED, None),
       Self::HeaderParsing(_)
       | Self::Internal(_)
       | Self::Database(_)
-      | Self::HeaderValueParsing(_) => (StatusCode::INTERNAL_SERVER_ERROR, None),
+      | Self::HeaderValueParsing(_)
+      | Self::EventSend(_) => (StatusCode::INTERNAL_SERVER_ERROR, None),
       Self::ExternalRequest(ref request) => (
         request
           .status()

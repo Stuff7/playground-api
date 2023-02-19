@@ -9,18 +9,20 @@ use crate::{
 };
 
 use mongodb::{
-  bson::{self, doc, to_document, Document},
+  bson::{self, to_document, Document},
   change_stream::{event::ChangeStreamEvent, ChangeStream},
   options::{
     ChangeStreamOptions, ClientOptions, FindOneAndUpdateOptions,
-    FullDocumentType, ReplaceOptions, ResolverConfig, ReturnDocument,
-    UpdateOptions,
+    FullDocumentType, ReplaceOptions, ResolverConfig, UpdateOptions,
   },
   results::UpdateResult,
-  Client,
+  Client, Cursor,
 };
 use once_cell::sync::{Lazy, OnceCell};
 use thiserror::Error;
+
+pub use mongodb::bson::doc;
+pub use mongodb::options::ReturnDocument;
 
 // First we load the database within the main async runtime
 static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
@@ -126,6 +128,18 @@ impl Database {
     Ok(collection.find_one(doc! { "_id": id }, None).await?)
   }
 
+  pub async fn aggregate<T: Collection>(
+    &self,
+    pipeline: impl IntoIterator<Item = Document>,
+  ) -> DBResult<Cursor<T>> {
+    let result = self
+      .collection::<T>()
+      .aggregate(pipeline, None)
+      .await?
+      .with_type::<T>();
+    Ok(result)
+  }
+
   // pub async fn delete<T: Collection>(
   //   &self,
   //   query: Document,
@@ -139,9 +153,6 @@ impl Database {
     query: Document,
   ) -> DBResult<u64> {
     let collection = self.collection::<T>();
-    collection
-      .update_many(query.clone(), doc! { "$set": { "archived": true } }, None)
-      .await?;
     Ok(collection.delete_many(query, None).await?.deleted_count)
   }
 
@@ -149,10 +160,11 @@ impl Database {
     &self,
     update: Document,
     query: Document,
+    return_document: Option<ReturnDocument>,
   ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     let options = FindOneAndUpdateOptions::builder()
-      .return_document(ReturnDocument::After)
+      .return_document(return_document.unwrap_or(ReturnDocument::After))
       .build();
     Ok(
       collection

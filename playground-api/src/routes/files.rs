@@ -3,8 +3,11 @@ use std::collections::HashSet;
 use crate::{
   api::{self, APIError, APIResult},
   auth::session::{FileId, FileIdVecQuery, FolderBody, FolderQuery, Session},
-  db,
+  console::Colorize,
+  db::{self, FolderChange, PartialUserFile},
   http::stream_video,
+  log,
+  websockets::channel::{EventMessage, EventSender},
   AppResult,
 };
 
@@ -19,18 +22,26 @@ use serde::{Deserialize, Serialize};
 use format as f;
 
 #[derive(Clone)]
-pub struct VideoRouterState {
+pub struct FilesRouterState {
+  event_sender: EventSender,
   request_client: reqwest::Client,
 }
 
-impl FromRef<VideoRouterState> for reqwest::Client {
-  fn from_ref(state: &VideoRouterState) -> Self {
+impl FromRef<FilesRouterState> for reqwest::Client {
+  fn from_ref(state: &FilesRouterState) -> Self {
     state.request_client.clone()
   }
 }
 
-pub fn api() -> AppResult<Router> {
-  let state = VideoRouterState {
+impl FromRef<FilesRouterState> for EventSender {
+  fn from_ref(state: &FilesRouterState) -> Self {
+    state.event_sender.clone()
+  }
+}
+
+pub fn api(event_sender: EventSender) -> AppResult<Router> {
+  let state = FilesRouterState {
+    event_sender,
     request_client: reqwest::Client::new(),
   };
   Ok(
@@ -68,7 +79,7 @@ pub async fn get_files(
 ) -> APIResult<Json<Vec<db::UserFile>>> {
   let files = db::DATABASE
     .find_many::<db::UserFile>(db::UserFile::folder_query(
-      session.user_id,
+      &session.user_id,
       folder,
     )?)
     .await
@@ -86,22 +97,21 @@ pub async fn create_video(
   session: Session,
   Path(video_id): Path<String>,
   State(request_client): State<reqwest::Client>,
+  State(event_sender): State<EventSender>,
   FolderBody(folder, body): FolderBody<CreateVideoBody>,
 ) -> APIResult<Json<db::UserFile>> {
   let mut metadata = fetch_video_metadata(&request_client, &video_id).await?;
+
   if let Some(thumbnail) = body.thumbnail {
     metadata.thumbnail = thumbnail;
   }
-  Ok(Json(
-    save_file(&db::UserFile::from_video(
-      metadata,
-      session.user_id,
-      folder,
-      body.name,
-    )?)
-    .await?
-    .clone(),
-  ))
+
+  save_file(
+    &db::UserFile::from_video(metadata, session.user_id, folder, body.name)?,
+    event_sender,
+  )
+  .await
+  .map(Json)
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,17 +121,15 @@ pub struct CreateFolderBody {
 
 pub async fn create_folder(
   session: Session,
+  State(event_sender): State<EventSender>,
   FolderBody(folder, body): FolderBody<CreateFolderBody>,
 ) -> APIResult<Json<db::UserFile>> {
-  Ok(Json(
-    save_file(&db::UserFile::new_folder(
-      session.user_id,
-      body.name,
-      folder,
-    )?)
-    .await?
-    .clone(),
-  ))
+  save_file(
+    &db::UserFile::new_folder(session.user_id, body.name, folder)?,
+    event_sender,
+  )
+  .await
+  .map(Json)
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,21 +143,63 @@ pub struct MoveFilesResponse {
   moved_count: u64,
 }
 
+// Things to notify on:
+// * The files from the folders of the moved files
+// * The files from the destination folder
 pub async fn move_files(
   session: Session,
+  State(event_sender): State<EventSender>,
   FolderBody(folder, mut body): FolderBody<MoveFilesBody>,
 ) -> APIResult<Json<MoveFilesResponse>> {
   let folder = folder.unwrap_or_else(|| session.user_id.clone());
   body.files.remove(&session.user_id);
   body.files.remove(&folder);
   let update = db::UserFile::query(&db::PartialUserFile {
-    folder_id: Some(folder.clone()),
+    folder_id: Some(folder),
     ..Default::default()
   })?;
-  let query = db::UserFile::files_query(session.user_id, &body.files)?;
+
+  let mut files = body
+    .files
+    .into_iter()
+    .map(|id| db::PartialUserFile {
+      id: Some(id),
+      ..Default::default()
+    })
+    .collect::<Vec<_>>();
+
+  let old_folders = db::DATABASE
+    .find_many::<db::UserFile>(db::UserFile::query_many(
+      &session.user_id,
+      &files,
+    )?)
+    .await?
+    .into_iter()
+    .map(|file| file.folder_id)
+    .collect::<HashSet<_>>()
+    .into_iter()
+    .map(|id| db::PartialUserFile {
+      folder_id: Some(id),
+      ..Default::default()
+    });
+  let query = db::UserFile::query_many(&session.user_id, &files)?;
+
   let result = db::DATABASE
     .update_many::<db::UserFile>(update, query)
     .await?;
+
+  if result.modified_count > 0 {
+    files.extend(old_folders.collect::<Vec<_>>());
+    let changes = db::UserFile::get_folder_files(&db::UserFile::query_many(
+      &session.user_id,
+      &files,
+    )?)
+    .await?;
+
+    log!(info@"UPDATE CHANGES => {changes:#?}");
+    send_folder_changes(&event_sender, changes)?;
+  }
+
   Ok(Json(MoveFilesResponse {
     moved_count: result.modified_count,
   }))
@@ -162,19 +212,54 @@ pub struct UpdateFileBody {
 
 pub async fn update_file(
   session: Session,
+  State(event_sender): State<EventSender>,
   FileId(file_id): FileId,
   FolderBody(folder, body): FolderBody<UpdateFileBody>,
 ) -> APIResult<Json<db::UserFile>> {
-  let update = db::UserFile::update_query(body.name, folder)?;
-  let query = db::UserFile::user_query(file_id.clone(), session.user_id)?;
-  Ok(Json(
-    db::DATABASE
-      .update::<db::UserFile>(update, query)
-      .await?
-      .ok_or_else(|| {
-        APIError::NotFound(f!("File with id {file_id:?} not found"))
-      })?,
-  ))
+  let update = &mut db::PartialUserFile::default();
+  update.name = body.name.map(db::NonEmptyString::try_from).transpose()?;
+  update.folder_id = folder.clone();
+  let update = db::UserFile::query(update)?;
+  let query = db::UserFile::query(&db::PartialUserFile {
+    id: Some(file_id.clone()),
+    user_id: Some(session.user_id.clone()),
+    ..Default::default()
+  })?;
+  let original_file = db::DATABASE
+    .update::<db::UserFile>(update, query, Some(db::ReturnDocument::Before))
+    .await?
+    .ok_or_else(|| {
+      APIError::NotFound(f!("File with id {file_id:?} not found"))
+    })?;
+  let changes = if folder.is_some() {
+    db::UserFile::get_folder_files(&db::UserFile::query_many(
+      &session.user_id,
+      &vec![
+        db::PartialUserFile {
+          folder_id: folder,
+          ..Default::default()
+        },
+        db::PartialUserFile {
+          folder_id: Some(original_file.folder_id.clone()),
+          ..Default::default()
+        },
+      ],
+    )?)
+    .await?
+  } else {
+    db::UserFile::get_folder_files(&db::UserFile::query(
+      &db::PartialUserFile {
+        id: Some(original_file.id.clone()),
+        ..Default::default()
+      },
+    )?)
+    .await?
+  };
+
+  log!(info@"SINGLE UPDATE CHANGE => {changes:#?}");
+  send_folder_changes(&event_sender, changes)?;
+
+  Ok(Json(original_file))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -185,6 +270,7 @@ pub struct DeleteFilesResponse {
 
 pub async fn delete_files(
   session: Session,
+  State(event_sender): State<EventSender>,
   FileIdVecQuery(mut query): FileIdVecQuery,
 ) -> APIResult<Json<DeleteFilesResponse>> {
   query.remove(&session.user_id);
@@ -193,7 +279,9 @@ pub async fn delete_files(
     .flat_map(|id| {
       [
         db::PartialUserFile {
-          folder_id: Some(id.clone()),
+          folder_id: Some(
+            db::UserFile::map_folder_id(&session.user_id, &id).to_string(),
+          ),
           user_id: Some(session.user_id.clone()),
           ..Default::default()
         },
@@ -206,10 +294,18 @@ pub async fn delete_files(
     })
     .collect::<Vec<_>>();
 
+  println!("QUERY => {filter:#?}");
+  let query = db::UserFile::query_many(&session.user_id, &filter)?;
+  let changes = db::UserFile::get_folder_files(&db::UserFile::query_many(
+    &session.user_id,
+    &filter,
+  )?)
+  .await?;
+  log!(info@"DELETE CHANGES => {changes:#?}");
+  send_folder_changes(&event_sender, changes)?;
+
   Ok(Json(DeleteFilesResponse {
-    deleted: db::DATABASE
-      .delete_many::<db::UserFile>(db::UserFile::query_many(&filter)?)
-      .await?,
+    deleted: db::DATABASE.delete_many::<db::UserFile>(query).await?,
   }))
 }
 
@@ -265,12 +361,42 @@ fn extract_drive_file_id(share_link: &str) -> Option<String> {
   })
 }
 
-async fn save_file(file: &db::UserFile) -> APIResult<&db::UserFile> {
-  db::save_file(file).await?.ok_or_else(|| {
+async fn save_file(
+  user_file: &db::UserFile,
+  event_sender: EventSender,
+) -> APIResult<db::UserFile> {
+  let new_file = db::save_file(user_file).await?.ok_or_else(|| {
     APIError::Conflict(f!(
       "A file named {:?} already exists in folder with id {:?}",
-      file.name,
-      file.folder_id
+      user_file.name,
+      user_file.folder_id
     ))
-  })
+  })?;
+
+  let changes =
+    db::UserFile::get_folder_files(&db::UserFile::query(&PartialUserFile {
+      id: Some(new_file.id.clone()),
+      ..Default::default()
+    })?)
+    .await?;
+
+  log!("CREATE CHANGES => {changes:#?}");
+  send_folder_changes(&event_sender, changes)?;
+
+  Ok(new_file.clone())
+}
+
+fn send_folder_changes(
+  event_sender: &EventSender,
+  changes: Vec<FolderChange>,
+) -> APIResult {
+  if event_sender.receiver_count() == 0 {
+    log!(info@"There's {} folder changes but no one's listening. Message will not be sent", changes.len());
+  } else {
+    log!(info@"Sending message to {} listeners", event_sender.receiver_count());
+    for change in changes.into_iter() {
+      event_sender.send(EventMessage::FolderChange(change))?;
+    }
+  }
+  Ok(())
 }

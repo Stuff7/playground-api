@@ -1,4 +1,6 @@
-use super::{event::EventExitRequest, file_watcher::FileChange};
+use crate::db;
+
+use super::event::EventExitRequest;
 
 use axum::extract::ws::Message;
 use tokio::sync::broadcast;
@@ -18,7 +20,7 @@ impl<T: Clone> BroadcastChannel<T> {
 
 #[derive(Debug, Clone)]
 pub enum EventMessage {
-  FileChange(FileChange),
+  FolderChange(db::FolderChange),
   Exit(EventExitRequest),
 }
 

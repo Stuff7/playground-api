@@ -1,5 +1,8 @@
 use std::collections::HashSet;
 
+use format as f;
+
+use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, to_bson, to_document, Document};
 use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -60,6 +63,16 @@ impl Collection for User {
   }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderChange {
+  pub user_id: String,
+  pub folder_id: String,
+  pub files: Vec<UserFile>,
+}
+
+const ROOT_FOLDER_ALIAS: &str = "root";
+
 #[partial]
 #[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
 #[serde(rename_all = "camelCase")]
@@ -116,72 +129,95 @@ impl UserFile {
   pub fn new_root_folder(user_id: String) -> DBResult<Self> {
     Ok(Self {
       id: user_id.clone(),
-      folder_id: "root".to_string(),
+      folder_id: ROOT_FOLDER_ALIAS.to_string(),
       user_id,
-      name: "root".try_into()?,
+      name: ROOT_FOLDER_ALIAS.try_into()?,
       metadata: FileMetadata::Folder,
     })
   }
 
-  pub fn user_query(file_id: String, user_id: String) -> DBResult<Document> {
-    let query = &mut PartialUserFile::default();
-    query.id = Some(file_id);
-    query.user_id = Some(user_id);
-    Self::query(query)
+  pub fn map_folder_id<'a>(user_id: &'a str, folder_id: &'a str) -> &'a str {
+    if folder_id == ROOT_FOLDER_ALIAS {
+      user_id
+    } else {
+      folder_id
+    }
   }
 
   pub fn folder_query(
-    user_id: String,
+    user_id: &str,
     folder_id: Option<String>,
   ) -> DBResult<Document> {
-    let mut query = doc! {
-      UserFile::user_id(): user_id
-    };
-    query.insert(
-      UserFile::folder_id(),
-      match folder_id {
-        Some(folder_id) => to_bson(&folder_id)?,
-        None => to_bson(&doc!("$ne": "root"))?,
-      },
-    );
+    let folder_id = folder_id
+      .map(|id| to_bson(&Self::map_folder_id(user_id, &id)))
+      .unwrap_or_else(|| to_bson(&doc!("$ne": ROOT_FOLDER_ALIAS)))?;
 
-    Ok(query)
-  }
-
-  pub fn update_query(
-    name: Option<String>,
-    folder_id: Option<String>,
-  ) -> DBResult<Document> {
-    let update = &mut PartialUserFile::default();
-    update.name = name.map(NonEmptyString::try_from).transpose()?;
-    update.folder_id = folder_id;
-    Self::query(update)
-  }
-
-  pub fn files_query(
-    user_id: String,
-    files: &HashSet<String>,
-  ) -> DBResult<Document> {
-    let query = &mut PartialUserFile::default();
-    query.user_id = Some(user_id);
-    let mut query = Self::query(query)?;
-    let files = files
-      .iter()
-      .map(|id| PartialUserFile {
-        id: Some(id.to_string()),
-        ..Default::default()
-      })
-      .collect::<Vec<_>>();
-    query.insert("$or", to_bson::<Vec<PartialUserFile>>(&files)?);
-    Ok(query)
+    Ok(doc! {
+      Self::user_id(): user_id,
+      Self::folder_id(): folder_id
+    })
   }
 
   pub fn query(user_file: &PartialUserFile) -> DBResult<Document> {
     Ok(to_document::<PartialUserFile>(user_file)?)
   }
 
-  pub fn query_many(user_files: &Vec<PartialUserFile>) -> DBResult<Document> {
-    Ok(doc! { "$or": to_bson::<Vec<PartialUserFile>>(user_files)? })
+  pub fn query_many(
+    user_id: &str,
+    user_files: &Vec<PartialUserFile>,
+  ) -> DBResult<Document> {
+    Ok(
+      doc! { Self::user_id(): user_id, "$or": to_bson::<Vec<PartialUserFile>>(user_files)? },
+    )
+  }
+
+  /// Runs an aggregation that follows these stages:
+  /// * Match all the files using the `filter` + `user_id`
+  /// * Lookups all the files that share a `folder_id` with any of the previous matched files
+  /// * Groups all the matches by their `folder_id`
+  /// * Returns the groups as a `Vec<FolderChange>`
+  pub async fn get_folder_files(
+    query: &Document,
+  ) -> DBResult<Vec<FolderChange>> {
+    let pipeline = vec![
+      doc! { "$match": query },
+      doc! { "$lookup": {
+          "from": Self::collection_name(),
+          "localField": Self::folder_id(),
+          "foreignField": Self::folder_id(),
+          "as": Self::collection_name()
+      }},
+      doc! { "$unwind": f!("${}", Self::collection_name()) },
+      doc! { "$replaceRoot": { "newRoot": f!("${}", Self::collection_name()) } },
+      doc! { "$group": {
+          "_id": {
+            Self::folder_id(): f!("${}", Self::folder_id()),
+            Self::user_id(): f!("${}", Self::user_id()),
+            "file_id": "$_id"
+          },
+          "file": { "$first": "$$ROOT" }
+      }},
+      doc! { "$group": {
+          "_id": f!("$_id.{}", Self::folder_id()),
+          Self::user_id(): { "$first": f!("$_id.{}", Self::user_id()) },
+          Self::collection_name(): { "$push": "$file" }
+      }},
+      doc! { "$project": {
+          "_id": 0,
+          Self::folder_id(): "$_id",
+          Self::user_id(): 1,
+          Self::collection_name(): 1
+      }},
+    ];
+    println!("PIPE => {pipeline:#?}");
+    let changes = super::DATABASE
+      .aggregate::<Self>(pipeline)
+      .await?
+      .with_type::<FolderChange>()
+      .try_collect::<Vec<_>>()
+      .await?;
+
+    Ok(changes)
   }
 }
 

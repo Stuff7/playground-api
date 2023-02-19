@@ -223,11 +223,7 @@ async fn assert_valid_folder(
 ) -> APIResult<Option<String>> {
   let mut result = folder_id.clone();
   if let Some(folder_id) = folder_id.as_deref() {
-    let folder_id = if folder_id == "root" {
-      user_id
-    } else {
-      folder_id
-    };
+    let folder_id = db::UserFile::map_folder_id(user_id, folder_id);
     let folder = db::DATABASE
       .find_by_id::<db::UserFile>(folder_id)
       .await?

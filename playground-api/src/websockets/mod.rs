@@ -1,6 +1,5 @@
-mod channel;
+pub mod channel;
 mod event;
-mod file_watcher;
 
 use crate::{
   auth::session::SessionQuery, console::Colorize, db::DBError, log,
@@ -31,11 +30,8 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use self::{
-  channel::{
-    EventChannel, EventSender, SocketChannel, SocketReceiver, SocketSender,
-  },
+  channel::{EventSender, SocketChannel, SocketReceiver, SocketSender},
   event::EventManager,
-  file_watcher::FileWatcher,
 };
 
 #[derive(Debug, Clone)]
@@ -43,14 +39,10 @@ pub struct WebSocketState {
   event_sender: EventSender,
 }
 
-pub fn api() -> Router {
-  let event_channel = EventChannel::new();
-  FileWatcher::new(event_channel.sender.clone());
+pub fn api(event_sender: EventSender) -> Router {
   Router::new()
     .route("/", get(ws_handler))
-    .with_state(WebSocketState {
-      event_sender: event_channel.sender,
-    })
+    .with_state(WebSocketState { event_sender })
 }
 
 /// The handler for the HTTP request (this gets called when the HTTP GET lands at the start

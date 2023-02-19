@@ -21,13 +21,13 @@ pub struct EventExitRequest {
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum EventType {
-  FileChange,
+  FolderChange,
 }
 
 impl EventType {
   pub fn new(name: &str) -> Option<Self> {
     match name {
-      "file-change" => Some(Self::FileChange),
+      "folder-change" => Some(Self::FolderChange),
       _ => None,
     }
   }
@@ -72,14 +72,14 @@ impl EventManager {
     match event {
       Event::Add(event_type) => {
         if self.events.contains(event_type) {
-          log!(info@">>> {socket_id} Ignoring file-change event add request since is already added.");
+          log!(info@">>> {socket_id} Ignoring folder-change event add request since is already added.");
           return;
         }
         match event_type {
-          EventType::FileChange => {
+          EventType::FolderChange => {
             let mut socket_sender = socket_sender.clone();
             let mut event_receiver = event_sender.subscribe();
-            log!(info@">>> {socket_id} Adding file-change event for {user_id:?}");
+            log!(info@">>> {socket_id} Adding folder-change event for {user_id:?}");
             tokio::spawn(async move {
               file_change_event_dispatcher(
                 &mut socket_sender,
@@ -118,14 +118,14 @@ async fn file_change_event_dispatcher(
         event_type,
         socket_id: id,
       }) => {
-        if id == socket_id && event_type == EventType::FileChange {
-          log!(info@">>> {socket_id} exiting file-change event task");
+        if id == socket_id && event_type == EventType::FolderChange {
+          log!(info@">>> {socket_id} exiting folder-change event task");
           return;
         }
-        log!(info@">>> {socket_id} file-change event received exit for {id} which is not us so we ignore");
+        log!(info@">>> {socket_id} folder-change event received exit for {id} which is not us so we ignore");
         continue;
       }
-      EventMessage::FileChange(change) => {
+      EventMessage::FolderChange(change) => {
         if change.user_id != user_id {
           continue;
         }
