@@ -196,7 +196,6 @@ pub async fn move_files(
     )?)
     .await?;
 
-    log!(info@"UPDATE CHANGES => {changes:#?}");
     send_folder_changes(&event_sender, changes)?;
   }
 
@@ -256,7 +255,6 @@ pub async fn update_file(
     .await?
   };
 
-  log!(info@"SINGLE UPDATE CHANGE => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
 
   Ok(Json(original_file))
@@ -294,14 +292,13 @@ pub async fn delete_files(
     })
     .collect::<Vec<_>>();
 
-  println!("QUERY => {filter:#?}");
   let query = db::UserFile::query_many(&session.user_id, &filter)?;
   let changes = db::UserFile::get_folder_files(&db::UserFile::query_many(
     &session.user_id,
     &filter,
   )?)
   .await?;
-  log!(info@"DELETE CHANGES => {changes:#?}");
+
   send_folder_changes(&event_sender, changes)?;
 
   Ok(Json(DeleteFilesResponse {
@@ -380,7 +377,6 @@ async fn save_file(
     })?)
     .await?;
 
-  log!("CREATE CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
 
   Ok(new_file.clone())

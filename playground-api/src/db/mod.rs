@@ -10,10 +10,9 @@ use crate::{
 
 use mongodb::{
   bson::{self, to_document, Document},
-  change_stream::{event::ChangeStreamEvent, ChangeStream},
   options::{
-    ChangeStreamOptions, ClientOptions, FindOneAndUpdateOptions,
-    FullDocumentType, ReplaceOptions, ResolverConfig, UpdateOptions,
+    ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig,
+    UpdateOptions,
   },
   results::UpdateResult,
   Client, Cursor,
@@ -140,13 +139,13 @@ impl Database {
     Ok(result)
   }
 
-  // pub async fn delete<T: Collection>(
-  //   &self,
-  //   query: Document,
-  // ) -> DBResult<Option<T>> {
-  //   let collection = self.collection::<T>();
-  //   Ok(collection.find_one_and_delete(query, None).await?)
-  // }
+  pub async fn delete<T: Collection>(
+    &self,
+    query: Document,
+  ) -> DBResult<Option<T>> {
+    let collection = self.collection::<T>();
+    Ok(collection.find_one_and_delete(query, None).await?)
+  }
 
   pub async fn delete_many<T: Collection>(
     &self,
@@ -186,7 +185,6 @@ impl Database {
   }
 
   /// Replace doc in collection or create it if it doesn't exist.
-  #[allow(dead_code)]
   pub async fn replace<T: Collection>(
     &self,
     doc: &T,
@@ -220,23 +218,6 @@ impl Database {
       )
       .await?;
     Ok(result.upserted_id.is_some().then_some(doc))
-  }
-
-  pub async fn watch<T: Collection>(
-    &self,
-  ) -> DBResult<ChangeStream<ChangeStreamEvent<T>>> {
-    let collection = self.collection::<T>();
-    let pipeline = vec![doc! {
-      "$match": {
-        "operationType": {
-          "$in": ["insert", "update", "delete"]
-        }
-      }
-    }];
-    let options = ChangeStreamOptions::builder()
-      .full_document(Some(FullDocumentType::UpdateLookup))
-      .build();
-    Ok(collection.watch(pipeline, options).await?)
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
