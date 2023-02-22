@@ -94,6 +94,13 @@ impl Collection for UserFile {
   }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIds {
+  pub ids: HashSet<String>,
+  pub folder_ids: HashSet<String>,
+}
+
 impl UserFile {
   pub fn from_video(
     video: Video,
@@ -162,6 +169,15 @@ impl UserFile {
     Ok(to_document::<PartialUserFile>(user_file)?)
   }
 
+  pub fn query_many_by_id(
+    user_id: &str,
+    ids: &HashSet<String>,
+  ) -> DBResult<Document> {
+    Ok(
+      doc! { Self::user_id(): user_id, "_id": { "$in": to_bson::<HashSet<String>>(ids)? } },
+    )
+  }
+
   pub fn query_many(
     user_id: &str,
     user_files: &Vec<PartialUserFile>,
@@ -169,6 +185,70 @@ impl UserFile {
     Ok(
       doc! { Self::user_id(): user_id, "$or": to_bson::<Vec<PartialUserFile>>(user_files)? },
     )
+  }
+
+  pub async fn query_nested_files(
+    user_id: &str,
+    ids: &HashSet<String>,
+  ) -> DBResult<Option<FileIds>> {
+    let query = &to_bson::<HashSet<String>>(ids)?;
+    let pipeline = vec![
+      doc! { "$match": {
+          "$or": [
+            { "_id": { "$in": query } },
+            { Self::folder_id(): { "$in": query } }
+          ],
+          Self::user_id(): user_id
+        }
+      },
+      doc! { "$graphLookup": {
+          "from": Self::collection_name(),
+          "startWith": "$_id",
+          "connectFromField": "_id",
+          "connectToField": Self::folder_id(),
+          "as": "children",
+          "maxDepth": 99
+        }
+      },
+      doc! { "$project": {
+          "dupedIds": {
+            "$concatArrays": [["$_id"], "$children._id"]
+          },
+          "dupedFolderIds": {
+            "$concatArrays": [[f!("${}", Self::folder_id())], f!("$children.{}", Self::folder_id())]
+          },
+        }
+      },
+      doc! { "$unwind": "$dupedIds" },
+      doc! { "$unwind": "$dupedFolderIds" },
+      doc! { "$group": {
+          "_id": null,
+          "ids": {
+            "$addToSet": "$dupedIds"
+          },
+          "folderIds": {
+            "$addToSet": "$dupedFolderIds"
+          }
+        }
+      },
+      doc! { "$project": {
+          "_id": 0,
+          "ids": "$ids",
+          "folderIds": "$folderIds",
+        }
+      },
+    ];
+
+    let result = super::DATABASE
+      .collection::<Self>()
+      .aggregate(pipeline, None)
+      .await?
+      .with_type::<FileIds>()
+      .try_collect::<Vec<FileIds>>()
+      .await?;
+    let result = result.into_iter().next();
+
+    Ok(result)
   }
 
   /// Runs an aggregation that follows these stages:
@@ -185,22 +265,53 @@ impl UserFile {
           "from": Self::collection_name(),
           "localField": Self::folder_id(),
           "foreignField": Self::folder_id(),
-          "as": Self::collection_name()
+          "as": "folderFiles",
       }},
-      doc! { "$unwind": f!("${}", Self::collection_name()) },
-      doc! { "$replaceRoot": { "newRoot": f!("${}", Self::collection_name()) } },
+      doc! { "$unwind": "$folderFiles" },
+      doc! { "$replaceRoot": { "newRoot": "$folderFiles" } },
       doc! { "$group": {
-          "_id": {
-            Self::folder_id(): f!("${}", Self::folder_id()),
-            Self::user_id(): f!("${}", Self::user_id()),
-            "file_id": "$_id"
-          },
-          "file": { "$first": "$$ROOT" }
+          "_id": f!("${}", Self::folder_id()),
+          Self::user_id(): { "$first": f!("${}", Self::user_id()) },
+          Self::collection_name(): { "$addToSet": "$$ROOT" }
       }},
+      doc! { "$project": {
+          "_id": 0,
+          Self::folder_id(): "$_id",
+          Self::user_id(): 1,
+          Self::collection_name(): 1
+      }},
+    ];
+    let changes = super::DATABASE
+      .aggregate::<Self>(pipeline)
+      .await?
+      .with_type::<FolderChange>()
+      .try_collect::<Vec<_>>()
+      .await?;
+
+    Ok(changes)
+  }
+
+  pub async fn lookup_folder_files(
+    user_id: &str,
+    folder_ids: &HashSet<String>,
+  ) -> DBResult<Vec<FolderChange>> {
+    let pipeline = vec![
+      doc! { "$match": {
+        "_id": { "$in": to_bson::<HashSet<String>>(folder_ids)? },
+        "userId": user_id
+      } },
+      doc! { "$lookup": {
+          "from": Self::collection_name(),
+          "localField": "_id",
+          "foreignField": Self::folder_id(),
+          "as": "folderFiles",
+      }},
+      doc! { "$unwind": "$folderFiles" },
+      doc! { "$replaceRoot": { "newRoot": "$folderFiles" } },
       doc! { "$group": {
-          "_id": f!("$_id.{}", Self::folder_id()),
-          Self::user_id(): { "$first": f!("$_id.{}", Self::user_id()) },
-          Self::collection_name(): { "$push": "$file" }
+          "_id": f!("${}", Self::folder_id()),
+          Self::user_id(): { "$first": f!("${}", Self::user_id()) },
+          Self::collection_name(): { "$addToSet": "$$ROOT" }
       }},
       doc! { "$project": {
           "_id": 0,

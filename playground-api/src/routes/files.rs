@@ -272,38 +272,21 @@ pub async fn delete_files(
   FileIdVecQuery(mut query): FileIdVecQuery,
 ) -> APIResult<Json<DeleteFilesResponse>> {
   query.remove(&session.user_id);
-  let filter = query
-    .into_iter()
-    .flat_map(|id| {
-      [
-        db::PartialUserFile {
-          folder_id: Some(
-            db::UserFile::map_folder_id(&session.user_id, &id).to_string(),
-          ),
-          user_id: Some(session.user_id.clone()),
-          ..Default::default()
-        },
-        db::PartialUserFile {
-          id: Some(id),
-          user_id: Some(session.user_id.clone()),
-          ..Default::default()
-        },
-      ]
-    })
-    .collect::<Vec<_>>();
+  let Some(result) =
+    db::UserFile::query_nested_files(&session.user_id, &query).await? else {
+      return Ok(Json(DeleteFilesResponse { deleted: 0 }))
+    };
 
-  let query = db::UserFile::query_many(&session.user_id, &filter)?;
-  let changes = db::UserFile::get_folder_files(&db::UserFile::query_many(
-    &session.user_id,
-    &filter,
-  )?)
-  .await?;
+  let query = db::UserFile::query_many_by_id(&session.user_id, &result.ids)?;
+  let deleted = db::DATABASE.delete_many::<db::UserFile>(query).await?;
+  let changes =
+    db::UserFile::lookup_folder_files(&session.user_id, &result.folder_ids)
+      .await?;
 
+  log!(info@"CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
 
-  Ok(Json(DeleteFilesResponse {
-    deleted: db::DATABASE.delete_many::<db::UserFile>(query).await?,
-  }))
+  Ok(Json(DeleteFilesResponse { deleted }))
 }
 
 #[derive(Debug, Deserialize)]
