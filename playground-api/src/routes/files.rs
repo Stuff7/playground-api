@@ -4,7 +4,7 @@ use crate::{
   api::{self, APIError, APIResult},
   auth::session::{FileId, FileIdVecQuery, FolderBody, FolderQuery, Session},
   console::Colorize,
-  db::{self, FolderChange, PartialUserFile},
+  db::{self, FolderChange},
   http::stream_video,
   log,
   websockets::channel::{EventMessage, EventSender},
@@ -155,46 +155,27 @@ pub async fn move_files(
   body.files.remove(&session.user_id);
   body.files.remove(&folder);
   let update = db::UserFile::query(&db::PartialUserFile {
-    folder_id: Some(folder),
+    folder_id: Some(folder.clone()),
     ..Default::default()
   })?;
 
-  let mut files = body
-    .files
-    .into_iter()
-    .map(|id| db::PartialUserFile {
-      id: Some(id),
-      ..Default::default()
-    })
-    .collect::<Vec<_>>();
+  let query = db::UserFile::query_many_by_id(&session.user_id, &body.files)?;
 
-  let old_folders = db::DATABASE
-    .find_many::<db::UserFile>(db::UserFile::query_many(
-      &session.user_id,
-      &files,
-    )?)
+  let mut folder_ids = db::DATABASE
+    .find_many::<db::UserFile>(query.clone())
     .await?
     .into_iter()
     .map(|file| file.folder_id)
-    .collect::<HashSet<_>>()
-    .into_iter()
-    .map(|id| db::PartialUserFile {
-      folder_id: Some(id),
-      ..Default::default()
-    });
-  let query = db::UserFile::query_many(&session.user_id, &files)?;
+    .collect::<HashSet<_>>();
 
   let result = db::DATABASE
     .update_many::<db::UserFile>(update, query)
     .await?;
 
   if result.modified_count > 0 {
-    files.extend(old_folders.collect::<Vec<_>>());
-    let changes = db::UserFile::get_folder_files(&db::UserFile::query_many(
-      &session.user_id,
-      &files,
-    )?)
-    .await?;
+    folder_ids.insert(folder);
+    let query = db::UserFile::query_many_by_id(&session.user_id, &folder_ids)?;
+    let changes = db::UserFile::lookup_folder_files(&query, false).await?;
 
     send_folder_changes(&event_sender, changes)?;
   }
@@ -231,27 +212,31 @@ pub async fn update_file(
       APIError::NotFound(f!("File with id {file_id:?} not found"))
     })?;
   let changes = if folder.is_some() {
-    db::UserFile::get_folder_files(&db::UserFile::query_many(
-      &session.user_id,
-      &vec![
-        db::PartialUserFile {
-          folder_id: folder,
-          ..Default::default()
-        },
-        db::PartialUserFile {
-          folder_id: Some(original_file.folder_id.clone()),
-          ..Default::default()
-        },
-      ],
-    )?)
+    db::UserFile::lookup_folder_files(
+      &db::UserFile::query_many(
+        &session.user_id,
+        &vec![
+          db::PartialUserFile {
+            folder_id: folder,
+            ..Default::default()
+          },
+          db::PartialUserFile {
+            folder_id: Some(original_file.folder_id.clone()),
+            ..Default::default()
+          },
+        ],
+      )?,
+      true,
+    )
     .await?
   } else {
-    db::UserFile::get_folder_files(&db::UserFile::query(
-      &db::PartialUserFile {
+    db::UserFile::lookup_folder_files(
+      &db::UserFile::query(&db::PartialUserFile {
         id: Some(original_file.id.clone()),
         ..Default::default()
-      },
-    )?)
+      })?,
+      true,
+    )
     .await?
   };
 
@@ -278,10 +263,10 @@ pub async fn delete_files(
     };
 
   let query = db::UserFile::query_many_by_id(&session.user_id, &result.ids)?;
+  let folder_query =
+    db::UserFile::query_many_by_id(&session.user_id, &result.folder_ids)?;
   let deleted = db::DATABASE.delete_many::<db::UserFile>(query).await?;
-  let changes =
-    db::UserFile::lookup_folder_files(&session.user_id, &result.folder_ids)
-      .await?;
+  let changes = db::UserFile::lookup_folder_files(&folder_query, false).await?;
 
   log!(info@"CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
@@ -353,12 +338,11 @@ async fn save_file(
     ))
   })?;
 
-  let changes =
-    db::UserFile::get_folder_files(&db::UserFile::query(&PartialUserFile {
-      id: Some(new_file.id.clone()),
-      ..Default::default()
-    })?)
-    .await?;
+  let query = db::UserFile::query(&db::PartialUserFile {
+    folder_id: Some(new_file.folder_id.clone()),
+    ..Default::default()
+  })?;
+  let changes = db::UserFile::lookup_folder_files(&query, true).await?;
 
   send_folder_changes(&event_sender, changes)?;
 

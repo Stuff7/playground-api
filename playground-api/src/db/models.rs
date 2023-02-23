@@ -251,58 +251,15 @@ impl UserFile {
     Ok(result)
   }
 
-  /// Runs an aggregation that follows these stages:
-  /// * Match all the files using the `filter` + `user_id`
-  /// * Lookups all the files that share a `folder_id` with any of the previous matched files
-  /// * Groups all the matches by their `folder_id`
-  /// * Returns the groups as a `Vec<FolderChange>`
-  pub async fn get_folder_files(
+  pub async fn lookup_folder_files(
     query: &Document,
+    grandparents: bool,
   ) -> DBResult<Vec<FolderChange>> {
     let pipeline = vec![
       doc! { "$match": query },
       doc! { "$lookup": {
           "from": Self::collection_name(),
-          "localField": Self::folder_id(),
-          "foreignField": Self::folder_id(),
-          "as": "folderFiles",
-      }},
-      doc! { "$unwind": "$folderFiles" },
-      doc! { "$replaceRoot": { "newRoot": "$folderFiles" } },
-      doc! { "$group": {
-          "_id": f!("${}", Self::folder_id()),
-          Self::user_id(): { "$first": f!("${}", Self::user_id()) },
-          Self::collection_name(): { "$addToSet": "$$ROOT" }
-      }},
-      doc! { "$project": {
-          "_id": 0,
-          Self::folder_id(): "$_id",
-          Self::user_id(): 1,
-          Self::collection_name(): 1
-      }},
-    ];
-    let changes = super::DATABASE
-      .aggregate::<Self>(pipeline)
-      .await?
-      .with_type::<FolderChange>()
-      .try_collect::<Vec<_>>()
-      .await?;
-
-    Ok(changes)
-  }
-
-  pub async fn lookup_folder_files(
-    user_id: &str,
-    folder_ids: &HashSet<String>,
-  ) -> DBResult<Vec<FolderChange>> {
-    let pipeline = vec![
-      doc! { "$match": {
-        "_id": { "$in": to_bson::<HashSet<String>>(folder_ids)? },
-        "userId": user_id
-      } },
-      doc! { "$lookup": {
-          "from": Self::collection_name(),
-          "localField": "_id",
+          "localField": if grandparents {Self::folder_id()} else {"_id"},
           "foreignField": Self::folder_id(),
           "as": "folderFiles",
       }},
