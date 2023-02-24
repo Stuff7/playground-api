@@ -253,13 +253,13 @@ impl UserFile {
 
   pub async fn lookup_folder_files(
     query: &Document,
-    grandparents: bool,
+    parents: bool,
   ) -> DBResult<Vec<FolderChange>> {
     let pipeline = vec![
       doc! { "$match": query },
       doc! { "$lookup": {
           "from": Self::collection_name(),
-          "localField": if grandparents {Self::folder_id()} else {"_id"},
+          "localField": if parents {Self::folder_id()} else {"_id"},
           "foreignField": Self::folder_id(),
           "as": "folderFiles",
       }},
