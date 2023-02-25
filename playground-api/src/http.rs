@@ -9,8 +9,12 @@ use crate::api::{APIError, APIResult};
 
 use format as f;
 
-const CONTENT_LENGTH: usize = 2 * 1024 * 1000; // 2MB
-const FIRST_CONTENT_LENGTH: usize = 5 * 1024 * 1000; // 5MB
+const fn mebibytes(mebibytes: usize) -> usize {
+  mebibytes * 1024 * 1024
+}
+
+const CONTENT_LENGTH: usize = mebibytes(10);
+const FIRST_CONTENT_LENGTH: usize = mebibytes(16);
 
 pub fn get_range(headers: HeaderMap) -> (usize, usize) {
   let raw_range = match headers.get("Range") {
