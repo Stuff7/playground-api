@@ -16,8 +16,9 @@ use format as f;
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_FILE_FIELDS: &str = "name,size,videoMediaMetadata,mimeType";
 
-static API_KEY: Lazy<String> =
-  Lazy::new(|| env_var("GOOGLE_API_KEY").unwrap_or_exit("Could not initialize google API"));
+static API_KEY: Lazy<String> = Lazy::new(|| {
+  env_var("GOOGLE_API_KEY").unwrap_or_exit("Could not initialize google API")
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +40,10 @@ pub struct DriveFile {
     skip_serializing_if = "Option::is_none"
   )]
   pub size_bytes: Option<u64>,
-  #[serde(alias = "videoMediaMetadata", skip_serializing_if = "Option::is_none")]
+  #[serde(
+    alias = "videoMediaMetadata",
+    skip_serializing_if = "Option::is_none"
+  )]
   pub video_metadata: Option<DriveVideoMetadata>,
 }
 
@@ -47,7 +51,10 @@ pub fn thumbnail_url(video_id: &str) -> String {
   f!("https://drive.google.com/thumbnail?id={video_id}")
 }
 
-pub async fn get_file(file_id: &str, request_client: &reqwest::Client) -> APIResult<DriveFile> {
+pub async fn get_file(
+  file_id: &str,
+  request_client: &reqwest::Client,
+) -> APIResult<DriveFile> {
   let response = request_client
     .get(&f!(
       "{DRIVE_API}/files/{file_id}?fields={DRIVE_FILE_FIELDS}&trashed=false&key={}",
@@ -88,7 +95,9 @@ where
   }
 }
 
-pub fn deserialize_number_from_string<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+pub fn deserialize_number_from_string<'de, T, D>(
+  deserializer: D,
+) -> Result<T, D::Error>
 where
   D: Deserializer<'de>,
   T: FromStr + serde::Deserialize<'de>,

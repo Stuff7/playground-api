@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
   api::{APIError, APIResult},
@@ -108,15 +108,8 @@ where
   }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FolderId {
-  pub folder: Option<String>,
-}
-
-pub struct FolderQuery(pub Option<String>);
-
 #[async_trait]
-impl<S> FromRequestParts<S> for FolderQuery
+impl<S> FromRequestParts<S> for db::PartialUserFile
 where
   S: Send + Sync,
 {
@@ -127,11 +120,29 @@ where
     _: &S,
   ) -> Result<Self, Self::Rejection> {
     let session = parts.extract::<Session>().await?;
-    let Query(query) = parts.extract::<Query<FolderId>>().await?;
+    let Query(query) =
+      parts.extract::<Query<HashMap<String, String>>>().await?;
 
-    Ok(Self(
-      assert_valid_folder(&session.user_id, &query.folder).await?,
-    ))
+    Ok(Self {
+      id: query.get(Self::id()).cloned(),
+      folder_id: assert_valid_folder(
+        &session.user_id,
+        &query.get(Self::folder_id()).cloned(),
+      )
+      .await?,
+      user_id: Some(session.user_id),
+      name: query
+        .get(Self::name())
+        .map(db::NonEmptyString::try_from)
+        .transpose()?,
+      metadata: query.get("type").and_then(|t| {
+        if t == "folder" {
+          Some(db::FileMetadata::Folder)
+        } else {
+          None
+        }
+      }),
+    })
   }
 }
 
@@ -217,6 +228,12 @@ where
   }
 }
 
+/// Asserts:
+/// * File with `folder_id` exists in files collection
+/// * File with `folder_id` is a folder
+/// * File belongs to user with `user_id`
+///
+/// Returns the `folder_id`, if root alias is used it returns the root folder_id
 async fn assert_valid_folder(
   user_id: &str,
   folder_id: &Option<String>,

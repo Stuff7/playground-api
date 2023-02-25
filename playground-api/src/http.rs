@@ -73,7 +73,10 @@ pub async fn json_response<T: serde::de::DeserializeOwned>(
   }
 }
 
-pub fn extract_header(headers: &HeaderMap, key: &str) -> APIResult<HeaderValue> {
+pub fn extract_header(
+  headers: &HeaderMap,
+  key: &str,
+) -> APIResult<HeaderValue> {
   Ok(
     headers
       .get(key)
@@ -95,7 +98,8 @@ pub async fn stream_video(
     .get(video_url)
     .header("Range", f!("bytes={byte_range}"))
     .send()
-    .await?;
+    .await?
+    .error_for_status()?;
 
   let headers = response.headers();
   let content_range = extract_header(headers, "Content-Range")?;

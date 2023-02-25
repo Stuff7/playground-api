@@ -17,7 +17,7 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum APIError {
-  #[error("External Request failed: {0}")]
+  #[error("External Request for {:?} failed: {0}", .0.url())]
   ExternalRequest(#[from] reqwest::Error),
   #[error("Could not parse header value into a str: {0}")]
   HeaderValueParsing(#[from] reqwest::header::ToStrError),

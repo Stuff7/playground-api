@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
   api::{self, APIError, APIResult},
-  auth::session::{FileId, FileIdVecQuery, FolderBody, FolderQuery, Session},
+  auth::session::{FileId, FileIdVecQuery, FolderBody, Session},
   console::Colorize,
   db::{self, FolderChange},
   http::stream_video,
@@ -74,14 +74,10 @@ pub async fn stream(
 }
 
 pub async fn get_files(
-  session: Session,
-  FolderQuery(folder): FolderQuery,
+  query: db::PartialUserFile,
 ) -> APIResult<Json<Vec<db::UserFile>>> {
   let files = db::DATABASE
-    .find_many::<db::UserFile>(db::UserFile::folder_query(
-      &session.user_id,
-      folder,
-    )?)
+    .find_many::<db::UserFile>(db::UserFile::query(&query)?)
     .await
     .unwrap_or_default();
   Ok(Json(files))

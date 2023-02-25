@@ -331,6 +331,14 @@ impl TryFrom<String> for NonEmptyString {
   }
 }
 
+impl TryFrom<&String> for NonEmptyString {
+  type Error = super::DBError;
+
+  fn try_from(s: &String) -> super::DBResult<Self> {
+    NonEmptyString::try_from_str(s)
+  }
+}
+
 impl TryFrom<&str> for NonEmptyString {
   type Error = super::DBError;
 
