@@ -2,19 +2,29 @@ use axum::{
   http::{HeaderMap, HeaderValue},
   response::IntoResponse,
 };
+use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
-use crate::api::{APIError, APIResult};
+use crate::{
+  api::{APIError, APIResult},
+  env_var,
+};
 
 use format as f;
 
-const fn mebibytes(mebibytes: usize) -> usize {
-  mebibytes * 1024 * 1024
+fn mebibytes(var_name: &str, default: usize) -> usize {
+  env_var(var_name)
+    .map(|n| n.parse::<usize>().unwrap_or(default))
+    .unwrap_or(default)
+    * 1024
+    * 1024
 }
 
-const CONTENT_LENGTH: usize = mebibytes(10);
-const FIRST_CONTENT_LENGTH: usize = mebibytes(16);
+static CONTENT_LENGTH: Lazy<usize> =
+  Lazy::new(|| mebibytes("VIDEO_CONTENT_LENGTH", 10));
+static FIRST_CONTENT_LENGTH: Lazy<usize> =
+  Lazy::new(|| mebibytes("VIDEO_FIRST_CONTENT_LENGTH", 16));
 
 pub fn get_range(headers: HeaderMap) -> (usize, usize) {
   let raw_range = match headers.get("Range") {
@@ -26,7 +36,7 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
       .split('-')
       .map(|v| v.parse::<usize>().ok())
       .collect::<Vec<_>>(),
-    None => vec![Some(0), Some(FIRST_CONTENT_LENGTH)],
+    None => vec![Some(0), Some(*FIRST_CONTENT_LENGTH)],
   };
 
   let start = raw_range
@@ -38,9 +48,9 @@ pub fn get_range(headers: HeaderMap) -> (usize, usize) {
   let end = raw_range.get(1).copied().unwrap_or_default().unwrap_or(
     start
       + if start == 0 {
-        FIRST_CONTENT_LENGTH
+        *FIRST_CONTENT_LENGTH
       } else {
-        CONTENT_LENGTH
+        *CONTENT_LENGTH
       },
   );
 
@@ -93,12 +103,13 @@ pub fn extract_header(
 pub async fn stream_video(
   video_url: &str,
   headers: HeaderMap,
-  client: &reqwest::Client,
 ) -> APIResult<impl IntoResponse> {
   let (range_start, range_end) = get_range(headers);
   let byte_range = f!("{range_start}-{range_end}");
 
-  let response = client
+  // Need to create a new client on each request or else google
+  // eventually starts blocking the requests
+  let response = reqwest::Client::new()
     .get(video_url)
     .header("Range", f!("bytes={byte_range}"))
     .send()

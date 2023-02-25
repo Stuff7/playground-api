@@ -61,14 +61,12 @@ pub fn api(event_sender: EventSender) -> AppResult<Router> {
 pub async fn stream(
   Path(video_id): Path<String>,
   headers: HeaderMap,
-  State(request_client): State<reqwest::Client>,
 ) -> APIResult<impl IntoResponse> {
   stream_video(
     &f!(
       "https://drive.google.com/uc?export=download&confirm=yTib&id={video_id}"
     ),
     headers,
-    &request_client,
   )
   .await
 }
