@@ -50,6 +50,7 @@ pub fn api(event_sender: EventSender) -> AppResult<Router> {
       .route("/", routing::delete(delete_files))
       .route("/:file_id", routing::patch(update_file))
       .route("/folder", routing::post(create_folder))
+      .route("/folder/:folder_id", routing::get(get_folder_family))
       .route("/folder/move", routing::put(move_files))
       .route("/video/metadata", routing::get(get_video_metadata))
       .route("/video/:video_id", routing::get(stream))
@@ -79,6 +80,19 @@ pub async fn get_files(
     .await
     .unwrap_or_default();
   Ok(Json(files))
+}
+
+pub async fn get_folder_family(
+  session: Session,
+  Path(folder_id): Path<String>,
+) -> APIResult<Json<db::FolderFamily>> {
+  Ok(Json(
+    db::UserFile::get_folder_family(&session.user_id, &folder_id)
+      .await?
+      .ok_or_else(|| {
+        APIError::NotFound(f!("Folder with id {folder_id:?} not found"))
+      })?,
+  ))
 }
 
 #[derive(Debug, Deserialize)]

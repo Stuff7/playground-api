@@ -8,7 +8,7 @@ use once_cell::sync::Lazy;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use partial_struct::{partial, CamelFields};
+use partial_struct::{omit_and_create, partial, CamelFields};
 
 use super::DBResult;
 
@@ -99,6 +99,20 @@ impl Collection for UserFile {
 pub struct FileIds {
   pub ids: HashSet<String>,
   pub folder_ids: HashSet<String>,
+}
+
+#[omit_and_create(FolderFamilyMember)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderFamily {
+  #[serde(rename = "_id")]
+  pub id: String,
+  pub folder_id: String,
+  pub name: String,
+  #[omit]
+  pub parents: Vec<FolderFamilyMember>,
+  #[omit]
+  pub children: Vec<FolderFamilyMember>,
 }
 
 impl UserFile {
@@ -285,6 +299,55 @@ impl UserFile {
       .await?;
 
     Ok(changes)
+  }
+
+  pub async fn get_folder_family(
+    user_id: &str,
+    folder_id: &str,
+  ) -> DBResult<Option<FolderFamily>> {
+    let pipeline = vec![
+      doc! { "$match": {
+        "_id": Self::map_folder_id(user_id, folder_id),
+        Self::user_id(): user_id
+      } },
+      doc! { "$graphLookup": {
+        "from": Self::collection_name(),
+        "startWith": f!("${}", Self::folder_id()),
+        "connectFromField": Self::folder_id(),
+        "connectToField": "_id",
+        "as": "parents",
+        "restrictSearchWithMatch": { "metadata.type": "folder" }
+      } },
+      doc! { "$lookup": {
+        "from": Self::collection_name(),
+        "localField": "_id",
+        "foreignField": Self::folder_id(),
+        "as": "children",
+      } },
+      doc! { "$match": {
+        "children.metadata.type": "folder"
+      } },
+      doc! { "$project": {
+        "_id": 1,
+        Self::name(): 1,
+        Self::folder_id(): 1,
+        "parents._id": 1,
+        f!("parents.{}", Self::name()): 1,
+        f!("parents.{}", Self::folder_id()): 1,
+        "children._id": 1,
+        f!("children.{}", Self::name()): 1,
+        f!("children.{}", Self::folder_id()): 1,
+      } },
+    ];
+
+    Ok(
+      super::DATABASE
+        .aggregate::<Self>(pipeline)
+        .await?
+        .with_type::<FolderFamily>()
+        .try_next()
+        .await?,
+    )
   }
 }
 
