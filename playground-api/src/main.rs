@@ -4,6 +4,7 @@ mod console;
 mod db;
 mod http;
 mod routes;
+mod string;
 mod websockets;
 
 use auth::session::Session;

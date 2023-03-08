@@ -1,3 +1,4 @@
+pub mod files;
 mod models;
 
 pub use models::*;
@@ -5,7 +6,9 @@ pub use models::*;
 use crate::{
   auth::jwt::{self, JWTError},
   console::Colorize,
-  env_var, log, GracefulExit,
+  env_var, log,
+  string::StringError,
+  GracefulExit,
 };
 
 use mongodb::{
@@ -87,14 +90,14 @@ pub async fn save_user(user: &User) -> DBResult<String> {
   let token = jwt::sign_token(&user._id)?;
   if let Some(user) = DATABASE.create(user, None).await? {
     DATABASE
-      .create(&UserFile::new_root_folder(user._id.clone())?, None)
+      .create(&files::File::new_root_folder(user._id.clone())?, None)
       .await?;
   }
   Ok(token)
 }
 
-pub async fn save_file(file: &UserFile) -> DBResult<Option<&UserFile>> {
-  let mut query = &mut PartialUserFile::default();
+pub async fn save_file(file: &files::File) -> DBResult<Option<&files::File>> {
+  let mut query = &mut files::PartialFile::default();
   query.user_id = Some(file.user_id.clone());
   query.folder_id = Some(file.folder_id.clone());
   query.name = Some(file.name.clone());
@@ -239,8 +242,8 @@ pub enum DBError {
   Bson(#[from] bson::ser::Error),
   #[error("Error parsing object id: {0}")]
   BsonOid(#[from] bson::oid::Error),
-  #[error("Invalid field error: {0}")]
-  InvalidField(String),
+  #[error("String Error: {0}")]
+  String(#[from] StringError),
 }
 
 type DBResult<T = ()> = Result<T, DBError>;

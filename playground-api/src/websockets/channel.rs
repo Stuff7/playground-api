@@ -1,4 +1,4 @@
-use crate::db;
+use crate::db::files::queries::FolderChange;
 
 use super::event::EventExitRequest;
 
@@ -20,7 +20,7 @@ impl<T: Clone> BroadcastChannel<T> {
 
 #[derive(Debug, Clone)]
 pub enum EventMessage {
-  FolderChange(db::FolderChange),
+  FolderChange(FolderChange),
   Exit(EventExitRequest),
 }
 

@@ -2,7 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
   api::{APIError, APIResult},
-  db, GracefulExit,
+  db::{
+    self,
+    files::{File, FileMetadata, PartialFile},
+  },
+  string::NonEmptyString,
+  GracefulExit,
 };
 
 use axum::{
@@ -109,7 +114,7 @@ where
 }
 
 #[async_trait]
-impl<S> FromRequestParts<S> for db::PartialUserFile
+impl<S> FromRequestParts<S> for PartialFile
 where
   S: Send + Sync,
 {
@@ -133,11 +138,11 @@ where
       user_id: Some(session.user_id),
       name: query
         .get(Self::name())
-        .map(db::NonEmptyString::try_from)
+        .map(NonEmptyString::try_from)
         .transpose()?,
       metadata: query.get("type").and_then(|t| {
         if t == "folder" {
-          Some(db::FileMetadata::Folder)
+          Some(FileMetadata::Folder)
         } else {
           None
         }
@@ -240,15 +245,15 @@ async fn assert_valid_folder(
 ) -> APIResult<Option<String>> {
   let mut result = folder_id.clone();
   if let Some(folder_id) = folder_id.as_deref() {
-    let folder_id = db::UserFile::map_folder_id(user_id, folder_id);
+    let folder_id = File::map_folder_id(user_id, folder_id);
     let folder = db::DATABASE
-      .find_by_id::<db::UserFile>(folder_id)
+      .find_by_id::<File>(folder_id)
       .await?
       .ok_or_else(|| {
         APIError::BadRequest(f!("Folder with id {folder_id:?} does not exist"))
       })?;
 
-    if !matches!(folder.metadata, db::FileMetadata::Folder) {
+    if !matches!(folder.metadata, FileMetadata::Folder) {
       return Err(APIError::BadRequest(f!(
         "File with id {folder_id:?} is not a folder"
       )));
@@ -267,6 +272,7 @@ async fn assert_writable_file(
   file_id: &str,
   folder_id: &Option<String>,
 ) -> APIResult {
+  println!("ONE => {user_id} {file_id} {folder_id:?}");
   if file_id == user_id {
     return Err(APIError::UnauthorizedMessage(
       "Root folders are read-only".to_string(),
@@ -274,10 +280,19 @@ async fn assert_writable_file(
   }
 
   if let Some(folder_id) = folder_id {
+    let folder_id = File::map_folder_id(user_id, folder_id);
     if file_id == folder_id {
       return Err(APIError::BadRequest(
         "A folder cannot be inside itself".to_string(),
       ));
+    }
+    let folder = File::get_folder_children(user_id, file_id)
+      .await?
+      .ok_or_else(|| APIError::NotFound(f!("File {file_id:?} not found")))?;
+    if folder.children.contains(folder_id) {
+      return Err(APIError::BadRequest(f!(
+        "File {file_id:?} cannot be a children of it's children"
+      )));
     }
   }
 

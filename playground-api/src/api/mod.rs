@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
   auth::{jwt::JWTError, oauth::OAuthError},
-  db::DBError,
+  db::{files::system::FileSystemError, DBError},
+  string::StringError,
   websockets::channel::EventSendError,
 };
 
@@ -55,6 +56,10 @@ pub enum APIError {
   NotFound(String),
   #[error("Event send error: {0}")]
   EventSend(#[from] EventSendError),
+  #[error("String Error: {0}")]
+  String(#[from] StringError),
+  #[error("File System Error: {0}")]
+  FileSystem(#[from] FileSystemError),
 }
 
 impl IntoResponse for APIError {
@@ -65,7 +70,9 @@ impl IntoResponse for APIError {
       Self::BadRequest(_)
       | Self::BadQuery(_)
       | Self::BadPath(_)
-      | Self::BadJson(_) => (StatusCode::BAD_REQUEST, None),
+      | Self::BadJson(_)
+      | Self::FileSystem(_)
+      | Self::String(_) => (StatusCode::BAD_REQUEST, None),
       Self::JsonParsing(ref data) => {
         (StatusCode::NOT_ACCEPTABLE, Some(data.clone()))
       }
