@@ -118,12 +118,15 @@ pub async fn create_video(
     metadata.thumbnail = thumbnail;
   }
 
-  save_file(
-    &File::from_video(metadata, session.user_id, folder, body.name)?,
-    event_sender,
-  )
-  .await
-  .map(Json)
+  let (new_file, changes) = File::create_one(&File::from_video(
+    metadata,
+    session.user_id,
+    folder,
+    body.name,
+  )?)
+  .await?;
+  send_folder_changes(&event_sender, changes)?;
+  Ok(Json(new_file))
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,12 +139,11 @@ pub async fn create_folder(
   State(event_sender): State<EventSender>,
   FolderBody(folder, body): FolderBody<CreateFolderBody>,
 ) -> APIResult<Json<File>> {
-  save_file(
-    &File::new_folder(session.user_id, body.name, folder)?,
-    event_sender,
-  )
-  .await
-  .map(Json)
+  let (new_file, changes) =
+    File::create_one(&File::new_folder(session.user_id, body.name, folder)?)
+      .await?;
+  send_folder_changes(&event_sender, changes)?;
+  Ok(Json(new_file))
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,29 +279,6 @@ fn extract_drive_file_id(share_link: &str) -> Option<String> {
     let slice = &share_link[(start + 7)..];
     slice.find('/').map(|end| slice[..end].to_string())
   })
-}
-
-async fn save_file(
-  user_file: &File,
-  event_sender: EventSender,
-) -> APIResult<File> {
-  let new_file = db::save_file(user_file).await?.ok_or_else(|| {
-    APIError::Conflict(f!(
-      "A file named {:?} already exists in folder with id {:?}",
-      user_file.name,
-      user_file.folder_id
-    ))
-  })?;
-
-  let query = File::query(&PartialFile {
-    id: Some(new_file.folder_id.clone()),
-    ..Default::default()
-  })?;
-  let changes = File::lookup_folder_files(&query).await?;
-
-  send_folder_changes(&event_sender, changes)?;
-
-  Ok(new_file.clone())
 }
 
 fn send_folder_changes(

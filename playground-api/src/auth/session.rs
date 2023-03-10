@@ -169,7 +169,6 @@ where
     parts: &mut Parts,
     _: &S,
   ) -> Result<Self, Self::Rejection> {
-    // TODO: error handling
     let Query(query) = parts.extract::<Query<FileIdVec>>().await?;
     Ok(Self(query.id.split(',').map(String::from).collect()))
   }

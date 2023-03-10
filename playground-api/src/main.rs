@@ -27,7 +27,7 @@ use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
-  db::init().await;
+  db::init("playground").await;
   let event_channel = websockets::channel::EventChannel::new();
   let auth_routes =
     auth::api().unwrap_or_exit("Could not initialize auth routes.");

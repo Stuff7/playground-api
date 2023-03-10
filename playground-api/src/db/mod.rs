@@ -36,7 +36,7 @@ pub static DATABASE: Lazy<&Database> = Lazy::new(|| {
     .unwrap_or_exit("Tried to access database before initialization")
 });
 
-pub async fn init() {
+pub async fn init(db_name: &str) {
   let client_options = ClientOptions::parse_with_resolver_config(
     env_var("MONGODB_URI").unwrap_or_exit("Could not find MongoDB URI"),
     ResolverConfig::cloudflare(),
@@ -48,7 +48,7 @@ pub async fn init() {
     .unwrap_or_exit("Could not initialize MongoDB client");
 
   DATABASE_RESULT
-    .set(Database(client.database("playground")))
+    .set(Database(client.database(db_name)))
     .map_err(DBError::AlreadyInitialized)
     .unwrap_or_exit("Database was initialized more than once");
   log!(info@"Database Initialized");

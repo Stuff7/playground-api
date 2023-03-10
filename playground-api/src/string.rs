@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -11,6 +13,13 @@ impl NonEmptyString {
     } else {
       Ok(NonEmptyString(s.to_string()))
     }
+  }
+}
+
+impl Deref for NonEmptyString {
+  type Target = String;
+  fn deref(&self) -> &Self::Target {
+    &self.0
   }
 }
 

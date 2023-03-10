@@ -4,7 +4,7 @@ use mongodb::{bson::doc, options::ReturnDocument, results::UpdateResult};
 use thiserror::Error;
 
 use crate::{
-  db::files::PartialFile,
+  db::{files::PartialFile, save_file},
   string::{NonEmptyString, StringError},
 };
 
@@ -60,7 +60,6 @@ impl File {
     if file_id == user_id {
       return Err(FileSystemError::ReadOnly);
     }
-    // TODO: Need to get the direct children as full File and all children as id only for `file_id`.folderId and folder
     let folder = folder.map(|f| Self::map_folder_id(user_id, &f).to_string());
     if let Some(ref folder) = folder {
       let query_result = Self::get_folder_children(user_id, file_id).await?;
@@ -100,6 +99,25 @@ impl File {
 
     Ok((original_file, changes))
   }
+
+  pub async fn create_one(
+    user_file: &Self,
+  ) -> FileSystemResult<(Self, Vec<FolderChange>)> {
+    let new_file = save_file(user_file).await?.ok_or_else(|| {
+      FileSystemError::NameConflict(
+        user_file.name.clone(),
+        user_file.folder_id.clone(),
+      )
+    })?;
+
+    let query = Self::query(&PartialFile {
+      id: Some(new_file.folder_id.clone()),
+      ..Default::default()
+    })?;
+    let changes = Self::lookup_folder_files(&query).await?;
+
+    Ok((new_file.clone(), changes))
+  }
 }
 
 #[derive(Error, Debug)]
@@ -114,6 +132,8 @@ pub enum FileSystemError {
   Internal(#[from] super::super::DBError),
   #[error("Bad formatted string {0}")]
   BadString(#[from] StringError),
+  #[error("A file with the name {0:?} already exists in folder with id {1:?}")]
+  NameConflict(NonEmptyString, String),
 }
 
 pub type FileSystemResult<T = ()> = Result<T, FileSystemError>;
