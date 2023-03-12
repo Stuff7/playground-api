@@ -161,10 +161,10 @@ pub struct MoveFilesResponse {
 pub async fn move_files(
   session: Session,
   State(event_sender): State<EventSender>,
-  Json(mut body): Json<MoveFilesBody>,
+  Json(body): Json<MoveFilesBody>,
 ) -> APIResult<Json<MoveFilesResponse>> {
   let (result, changes) =
-    File::move_many(&session.user_id, &mut body.files, &body.folder).await?;
+    File::move_many(&session.user_id, &body.files, &body.folder).await?;
 
   if let Some(changes) = changes {
     send_folder_changes(&event_sender, changes)?;

@@ -5,6 +5,7 @@ mod db;
 mod http;
 mod routes;
 mod string;
+mod tests;
 mod websockets;
 
 use auth::session::Session;

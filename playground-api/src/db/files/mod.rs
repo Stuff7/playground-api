@@ -1,6 +1,5 @@
 pub mod queries;
 pub mod system;
-pub mod tests;
 
 use crate::string::NonEmptyString;
 

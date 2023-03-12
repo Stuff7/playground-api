@@ -288,6 +288,11 @@ impl File {
         Self::user_id(): user_id,
       } },
       Self::find_all_children_stage(),
+      doc! { "$addFields": { "children": { "$cond": {
+        "if": { "$eq": [ { "$size": "$children" }, 0 ] },
+        "then": [null],
+        "else": "$children"
+      } } } },
       doc! { "$unwind": "$children" },
       doc! { "$group": {
         "_id": null,

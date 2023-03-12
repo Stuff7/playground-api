@@ -13,7 +13,7 @@ use super::{super::DATABASE, queries::FolderChange, File};
 impl File {
   pub async fn move_many(
     user_id: &str,
-    files: &mut HashSet<String>,
+    files: &HashSet<String>,
     folder: &str,
   ) -> FileSystemResult<(UpdateResult, Option<Vec<FolderChange>>)> {
     if files.contains(user_id) {
