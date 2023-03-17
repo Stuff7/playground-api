@@ -24,8 +24,6 @@ use tokio::sync::Mutex;
 
 use super::jwt;
 
-use format as f;
-
 pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> =
   Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -141,7 +139,9 @@ where
 
     Ok(Self {
       id: query.get(Self::id()).cloned(),
-      folder_id: query.get(Self::folder_id()).cloned(),
+      folder_id: query.get(Self::folder_id()).map(|folder| {
+        File::map_folder_id(&session.user_id, folder).to_string()
+      }),
       user_id: Some(session.user_id),
       name: query
         .get(Self::name())
@@ -203,42 +203,4 @@ where
       parts.extract::<Path<FileIdPath>>().await?;
     Ok(Self(file_id))
   }
-}
-
-/// Asserts:
-/// * File with `folder_id` exists in files collection
-/// * File with `folder_id` is a folder
-/// * File belongs to user with `user_id`
-///
-/// Returns the `folder_id`, if root alias is used it returns the root folder_id
-pub async fn assert_valid_folder(
-  user_id: &str,
-  folder_id: &Option<String>,
-  database: &Database,
-) -> APIResult<Option<String>> {
-  let mut result = folder_id.clone();
-  if let Some(folder_id) = folder_id.as_deref() {
-    let folder_id = File::map_folder_id(user_id, folder_id);
-    let folder =
-      database
-        .find_by_id::<File>(folder_id)
-        .await?
-        .ok_or_else(|| {
-          APIError::BadRequest(f!(
-            "Folder with id {folder_id:?} does not exist"
-          ))
-        })?;
-
-    if !matches!(folder.metadata, FileMetadata::Folder) {
-      return Err(APIError::BadRequest(f!(
-        "File with id {folder_id:?} is not a folder"
-      )));
-    }
-
-    if folder.user_id != user_id {
-      return Err(APIError::Unauthorized);
-    }
-    result = Some(folder_id.to_string());
-  }
-  Ok(result)
 }

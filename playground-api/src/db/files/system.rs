@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::Deref};
+use std::collections::HashSet;
 
 use mongodb::{
   bson::{doc, to_document},
@@ -15,16 +15,32 @@ use crate::{
 use super::{queries::FolderChange, File};
 
 #[derive(Debug, Clone)]
-pub struct FileSystem(pub Database);
+pub struct FileSystem {
+  pub(super) database: Database,
+}
 
-impl Deref for FileSystem {
-  type Target = Database;
-  fn deref(&self) -> &Self::Target {
-    &self.0
+impl From<&Database> for FileSystem {
+  fn from(database: &Database) -> Self {
+    Self {
+      database: database.clone(),
+    }
   }
 }
 
 impl FileSystem {
+  pub async fn find_many(
+    &self,
+    query: &PartialFile,
+  ) -> FileSystemResult<Vec<File>> {
+    Ok(
+      self
+        .database
+        .find_many::<File>(self.query(query)?)
+        .await
+        .unwrap_or_default(),
+    )
+  }
+
   pub async fn move_many(
     &self,
     user_id: &str,
@@ -46,6 +62,7 @@ impl FileSystem {
     }
 
     let result = self
+      .database
       .update_many::<File>(
         doc! {
           File::folder_id(): folder,
@@ -64,6 +81,31 @@ impl FileSystem {
       return Ok((result, Some(changes)));
     }
     Ok((result, None))
+  }
+
+  pub async fn delete_many(
+    &self,
+    user_id: &str,
+    ids: &HashSet<String>,
+  ) -> FileSystemResult<(u64, Vec<FolderChange>)> {
+    if ids.contains(user_id) {
+      return Err(FileSystemError::ReadOnly);
+    }
+
+    let Some(result) = self.query_nested_files(user_id, ids).await? else {
+      return Ok((0, Vec::new()))
+    };
+
+    let deleted = self
+      .database
+      .delete_many::<File>(self.query_many_by_id(user_id, &result.ids)?)
+      .await?;
+
+    let changes = self
+      .lookup_folder_files(&self.query_many_by_id(user_id, &result.folder_ids)?)
+      .await?;
+
+    Ok((deleted, changes))
   }
 
   pub async fn update_one(
@@ -95,6 +137,7 @@ impl FileSystem {
       ..Default::default()
     })?;
     let original_file = self
+      .database
       .update::<File>(update, query, Some(ReturnDocument::Before))
       .await?
       .ok_or(FileSystemError::NotFound)?;
@@ -144,7 +187,7 @@ impl FileSystem {
     query.user_id = Some(file.user_id.clone());
     query.folder_id = Some(file.folder_id.clone());
     query.name = Some(file.name.clone());
-    self.create(file, Some(to_document(query)?)).await
+    self.database.create(file, Some(to_document(query)?)).await
   }
 }
 

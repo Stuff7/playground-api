@@ -56,8 +56,7 @@ impl Database {
     let client = Client::with_options(client_options)?;
 
     let db = Self(client.database(db_name));
-    log!(info@"Database Initialized");
-    db.load_sessions().await;
+    log!(info@"Database {db_name:?} initialized");
     Ok(db)
   }
 
@@ -77,7 +76,7 @@ impl Database {
       .unwrap_or_exit("Could not save sessions to database");
   }
 
-  async fn load_sessions(&self) {
+  pub async fn load_sessions(&self) {
     log!(info@"Loading sessions");
     let session = self
       .0

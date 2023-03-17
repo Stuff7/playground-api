@@ -35,6 +35,7 @@ async fn main() {
   let database = Database::new("playground")
     .await
     .unwrap_or_exit("Could not initialize database");
+  database.load_sessions().await;
   let state =
     AppState::new(&database).unwrap_or_exit("Could not initialize app state");
   let auth_routes =
@@ -161,7 +162,7 @@ impl AppState {
       google: GoogleState::new()?,
       websockets: WebSocketState::new(),
       files_router: FilesRouterState::new(),
-      file_system: FileSystem(database.clone()),
+      file_system: FileSystem::from(database),
     })
   }
 }

@@ -124,6 +124,7 @@ impl FileSystem {
     ];
 
     let result = self
+      .database
       .collection::<File>()
       .aggregate(pipeline, None)
       .await?
@@ -150,6 +151,7 @@ impl FileSystem {
       }},
     ];
     let changes = self
+      .database
       .aggregate::<File>(pipeline)
       .await?
       .with_type::<FolderChange>()
@@ -180,6 +182,7 @@ impl FileSystem {
       }},
     ];
     let changes = self
+      .database
       .aggregate::<File>(pipeline)
       .await?
       .with_type::<DirectAndAllChildrenQueryResult>()
@@ -215,6 +218,7 @@ impl FileSystem {
     ];
 
     let family = self
+      .database
       .aggregate::<File>(pipeline)
       .await?
       .with_type::<FolderFamily>()
@@ -251,6 +255,7 @@ impl FileSystem {
 
     Ok(
       self
+        .database
         .aggregate::<File>(pipeline)
         .await?
         .with_type::<FolderChildren>()
@@ -291,6 +296,7 @@ impl FileSystem {
 
     Ok(
       self
+        .database
         .aggregate::<File>(pipeline)
         .await?
         .with_type::<ManyChildrenQueryResult>()

@@ -2,15 +2,12 @@ use std::collections::HashSet;
 
 use crate::{
   api::{self, APIError, APIResult},
-  auth::session::{assert_valid_folder, FileId, FileIdVecQuery, Session},
+  auth::session::{FileId, FileIdVecQuery, Session},
   console::Colorize,
-  db::{
-    files::{
-      queries::{FolderChange, FolderFamily},
-      system::FileSystem,
-      File, PartialFile, Video,
-    },
-    Database,
+  db::files::{
+    queries::{FolderChange, FolderFamily},
+    system::FileSystem,
+    File, PartialFile, Video,
   },
   http::stream_video,
   log,
@@ -73,19 +70,10 @@ pub async fn stream(
 }
 
 pub async fn get_files(
-  session: Session,
-  State(database): State<Database>,
   State(file_system): State<FileSystem>,
-  mut query: PartialFile,
+  query: PartialFile,
 ) -> APIResult<Json<Vec<File>>> {
-  // TODO: Move this to db::files
-  query.folder_id =
-    assert_valid_folder(&session.user_id, &query.folder_id, &database).await?;
-  let files = database
-    .find_many::<File>(file_system.query(&query)?)
-    .await
-    .unwrap_or_default();
-  Ok(Json(files))
+  Ok(Json(file_system.find_many(&query).await?))
 }
 
 pub async fn get_folder_family(
@@ -218,28 +206,12 @@ pub struct DeleteFilesResponse {
 pub async fn delete_files(
   session: Session,
   State(WebSocketState { event_sender }): State<WebSocketState>,
-  State(database): State<Database>,
   State(file_system): State<FileSystem>,
-  FileIdVecQuery(mut query): FileIdVecQuery,
+  FileIdVecQuery(query): FileIdVecQuery,
 ) -> APIResult<Json<DeleteFilesResponse>> {
-  query.remove(&session.user_id);
-  let Some(result) =
-    file_system.query_nested_files(&session.user_id, &query).await? else {
-      return Ok(Json(DeleteFilesResponse { deleted: 0 }))
-    };
+  let (deleted, changes) =
+    file_system.delete_many(&session.user_id, &query).await?;
 
-  let deleted = database
-    .delete_many::<File>(
-      file_system.query_many_by_id(&session.user_id, &result.ids)?,
-    )
-    .await?;
-  let changes = file_system
-    .lookup_folder_files(
-      &file_system.query_many_by_id(&session.user_id, &result.folder_ids)?,
-    )
-    .await?;
-
-  log!(info@"CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
 
   Ok(Json(DeleteFilesResponse { deleted }))
