@@ -2,23 +2,27 @@ use std::collections::HashSet;
 
 use crate::{
   api::{self, APIError, APIResult},
-  auth::session::{FileId, FileIdVecQuery, FolderBody, Session},
+  auth::session::{assert_valid_folder, FileId, FileIdVecQuery, Session},
   console::Colorize,
   db::{
-    self,
     files::{
       queries::{FolderChange, FolderFamily},
+      system::FileSystem,
       File, PartialFile, Video,
     },
+    Database,
   },
   http::stream_video,
   log,
-  websockets::channel::{EventMessage, EventSender},
-  AppResult,
+  websockets::{
+    channel::{EventMessage, EventSender},
+    WebSocketState,
+  },
+  AppResult, AppState,
 };
 
 use axum::{
-  extract::{FromRef, Path, Query, State},
+  extract::{Path, Query, State},
   http::HeaderMap,
   response::IntoResponse,
 };
@@ -27,29 +31,20 @@ use serde::{Deserialize, Serialize};
 
 use format as f;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FilesRouterState {
-  event_sender: EventSender,
   request_client: reqwest::Client,
 }
 
-impl FromRef<FilesRouterState> for reqwest::Client {
-  fn from_ref(state: &FilesRouterState) -> Self {
-    state.request_client.clone()
+impl FilesRouterState {
+  pub fn new() -> Self {
+    Self {
+      request_client: reqwest::Client::new(),
+    }
   }
 }
 
-impl FromRef<FilesRouterState> for EventSender {
-  fn from_ref(state: &FilesRouterState) -> Self {
-    state.event_sender.clone()
-  }
-}
-
-pub fn api(event_sender: EventSender) -> AppResult<Router> {
-  let state = FilesRouterState {
-    event_sender,
-    request_client: reqwest::Client::new(),
-  };
+pub fn api() -> AppResult<Router<AppState>> {
   Ok(
     Router::new()
       .route("/", routing::get(get_files))
@@ -60,8 +55,7 @@ pub fn api(event_sender: EventSender) -> AppResult<Router> {
       .route("/folder/move", routing::put(move_files))
       .route("/video/metadata", routing::get(get_video_metadata))
       .route("/video/:video_id", routing::get(stream))
-      .route("/video/:video_id", routing::post(create_video))
-      .with_state(state),
+      .route("/video/:video_id", routing::post(create_video)),
   )
 }
 
@@ -78,9 +72,17 @@ pub async fn stream(
   .await
 }
 
-pub async fn get_files(query: PartialFile) -> APIResult<Json<Vec<File>>> {
-  let files = db::DATABASE
-    .find_many::<File>(File::query(&query)?)
+pub async fn get_files(
+  session: Session,
+  State(database): State<Database>,
+  State(file_system): State<FileSystem>,
+  mut query: PartialFile,
+) -> APIResult<Json<Vec<File>>> {
+  // TODO: Move this to db::files
+  query.folder_id =
+    assert_valid_folder(&session.user_id, &query.folder_id, &database).await?;
+  let files = database
+    .find_many::<File>(file_system.query(&query)?)
     .await
     .unwrap_or_default();
   Ok(Json(files))
@@ -88,10 +90,12 @@ pub async fn get_files(query: PartialFile) -> APIResult<Json<Vec<File>>> {
 
 pub async fn get_folder_family(
   session: Session,
+  State(file_system): State<FileSystem>,
   Path(folder_id): Path<String>,
 ) -> APIResult<Json<FolderFamily>> {
   Ok(Json(
-    File::get_folder_family(&session.user_id, &folder_id)
+    file_system
+      .get_folder_family(&session.user_id, &folder_id)
       .await?
       .ok_or_else(|| {
         APIError::NotFound(f!("Folder with id {folder_id:?} not found"))
@@ -101,6 +105,7 @@ pub async fn get_folder_family(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateVideoBody {
+  folder: Option<String>,
   name: Option<String>,
   thumbnail: Option<String>,
 }
@@ -108,9 +113,10 @@ pub struct CreateVideoBody {
 pub async fn create_video(
   session: Session,
   Path(video_id): Path<String>,
-  State(request_client): State<reqwest::Client>,
-  State(event_sender): State<EventSender>,
-  FolderBody(folder, body): FolderBody<CreateVideoBody>,
+  State(FilesRouterState { request_client }): State<FilesRouterState>,
+  State(WebSocketState { event_sender }): State<WebSocketState>,
+  State(file_system): State<FileSystem>,
+  Json(body): Json<CreateVideoBody>,
 ) -> APIResult<Json<File>> {
   let mut metadata = fetch_video_metadata(&request_client, &video_id).await?;
 
@@ -118,30 +124,33 @@ pub async fn create_video(
     metadata.thumbnail = thumbnail;
   }
 
-  let (new_file, changes) = File::create_one(&File::from_video(
-    metadata,
-    session.user_id,
-    folder,
-    body.name,
-  )?)
-  .await?;
+  let (new_file, changes) = file_system
+    .create_one(&File::from_video(
+      metadata,
+      session.user_id,
+      body.folder,
+      body.name,
+    )?)
+    .await?;
   send_folder_changes(&event_sender, changes)?;
   Ok(Json(new_file))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateFolderBody {
+  folder: Option<String>,
   name: String,
 }
 
 pub async fn create_folder(
   session: Session,
-  State(event_sender): State<EventSender>,
-  FolderBody(folder, body): FolderBody<CreateFolderBody>,
+  State(WebSocketState { event_sender }): State<WebSocketState>,
+  State(file_system): State<FileSystem>,
+  Json(body): Json<CreateFolderBody>,
 ) -> APIResult<Json<File>> {
-  let (new_file, changes) =
-    File::create_one(&File::new_folder(session.user_id, body.name, folder)?)
-      .await?;
+  let (new_file, changes) = file_system
+    .create_one(&File::new_folder(session.user_id, body.name, body.folder)?)
+    .await?;
   send_folder_changes(&event_sender, changes)?;
   Ok(Json(new_file))
 }
@@ -160,11 +169,13 @@ pub struct MoveFilesResponse {
 
 pub async fn move_files(
   session: Session,
-  State(event_sender): State<EventSender>,
+  State(WebSocketState { event_sender }): State<WebSocketState>,
+  State(file_system): State<FileSystem>,
   Json(body): Json<MoveFilesBody>,
 ) -> APIResult<Json<MoveFilesResponse>> {
-  let (result, changes) =
-    File::move_many(&session.user_id, &body.files, &body.folder).await?;
+  let (result, changes) = file_system
+    .move_many(&session.user_id, &body.files, &body.folder)
+    .await?;
 
   if let Some(changes) = changes {
     send_folder_changes(&event_sender, changes)?;
@@ -183,13 +194,14 @@ pub struct UpdateFileBody {
 
 pub async fn update_file(
   session: Session,
-  State(event_sender): State<EventSender>,
+  State(WebSocketState { event_sender }): State<WebSocketState>,
+  State(file_system): State<FileSystem>,
   FileId(file_id): FileId,
   Json(body): Json<UpdateFileBody>,
 ) -> APIResult<Json<File>> {
-  let (file, changes) =
-    File::update_one(&session.user_id, &file_id, body.folder, body.name)
-      .await?;
+  let (file, changes) = file_system
+    .update_one(&session.user_id, &file_id, body.folder, body.name)
+    .await?;
 
   log!("CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
@@ -205,23 +217,27 @@ pub struct DeleteFilesResponse {
 
 pub async fn delete_files(
   session: Session,
-  State(event_sender): State<EventSender>,
+  State(WebSocketState { event_sender }): State<WebSocketState>,
+  State(database): State<Database>,
+  State(file_system): State<FileSystem>,
   FileIdVecQuery(mut query): FileIdVecQuery,
 ) -> APIResult<Json<DeleteFilesResponse>> {
   query.remove(&session.user_id);
   let Some(result) =
-    File::query_nested_files(&session.user_id, &query).await? else {
+    file_system.query_nested_files(&session.user_id, &query).await? else {
       return Ok(Json(DeleteFilesResponse { deleted: 0 }))
     };
 
-  let deleted = db::DATABASE
-    .delete_many::<File>(File::query_many_by_id(&session.user_id, &result.ids)?)
+  let deleted = database
+    .delete_many::<File>(
+      file_system.query_many_by_id(&session.user_id, &result.ids)?,
+    )
     .await?;
-  let changes = File::lookup_folder_files(&File::query_many_by_id(
-    &session.user_id,
-    &result.folder_ids,
-  )?)
-  .await?;
+  let changes = file_system
+    .lookup_folder_files(
+      &file_system.query_many_by_id(&session.user_id, &result.folder_ids)?,
+    )
+    .await?;
 
   log!(info@"CHANGES => {changes:#?}");
   send_folder_changes(&event_sender, changes)?;
@@ -236,7 +252,7 @@ pub struct GetFileMetadataQuery {
 }
 
 pub async fn get_video_metadata(
-  State(request_client): State<reqwest::Client>,
+  State(FilesRouterState { request_client }): State<FilesRouterState>,
   Query(GetFileMetadataQuery { video_id }): Query<GetFileMetadataQuery>,
 ) -> APIResult<Json<Video>> {
   Ok(Json(

@@ -3,7 +3,7 @@ mod event;
 
 use crate::{
   auth::session::SessionQuery, console::Colorize, db::DBError, log,
-  websockets::channel::SocketMessage,
+  websockets::channel::SocketMessage, AppState,
 };
 
 use std::borrow::Cow;
@@ -30,19 +30,28 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 
 use self::{
-  channel::{EventSender, SocketChannel, SocketReceiver, SocketSender},
+  channel::{
+    EventChannel, EventSender, SocketChannel, SocketReceiver, SocketSender,
+  },
   event::EventManager,
 };
 
 #[derive(Debug, Clone)]
 pub struct WebSocketState {
-  event_sender: EventSender,
+  pub event_sender: EventSender,
 }
 
-pub fn api(event_sender: EventSender) -> Router {
-  Router::new()
-    .route("/", get(ws_handler))
-    .with_state(WebSocketState { event_sender })
+impl WebSocketState {
+  pub fn new() -> Self {
+    let event_channel = EventChannel::new();
+    Self {
+      event_sender: event_channel.sender,
+    }
+  }
+}
+
+pub fn api() -> Router<AppState> {
+  Router::new().route("/", get(ws_handler))
 }
 
 /// The handler for the HTTP request (this gets called when the HTTP GET lands at the start

@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::{
   api::{APIError, APIResult},
   db::{
-    self,
     files::{File, FileMetadata, PartialFile},
+    users::User,
+    Database,
   },
   string::NonEmptyString,
   GracefulExit,
@@ -12,17 +13,27 @@ use crate::{
 
 use axum::{
   async_trait,
-  body::Body,
-  extract::{FromRequest, FromRequestParts, Path, Query, TypedHeader},
+  extract::{FromRequestParts, Path, Query, TypedHeader},
   headers::{authorization::Bearer, Authorization},
-  http::{request::Parts, Request},
-  Json, RequestExt, RequestPartsExt,
+  http::request::Parts,
+  RequestPartsExt,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use super::jwt;
 
 use format as f;
+
+pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> =
+  Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionCache {
+  _id: String,
+  pub sessions: HashSet<String>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct Session {
@@ -30,23 +41,23 @@ pub struct Session {
 }
 
 impl Session {
-  pub async fn get_user(&self) -> APIResult<db::User> {
-    db::DATABASE
-      .find_by_id::<db::User>(self.user_id.as_ref())
+  pub async fn get_user(&self, database: &Database) -> APIResult<User> {
+    database
+      .find_by_id::<User>(self.user_id.as_ref())
       .await?
       .ok_or(APIError::Unauthorized)
   }
 
   pub async fn save(token: &str) {
-    db::SESSIONS_CACHE.lock().await.insert(token.to_string());
+    SESSIONS_CACHE.lock().await.insert(token.to_string());
   }
 
   pub async fn invalidate(token: &str) {
-    db::SESSIONS_CACHE.lock().await.remove(token);
+    SESSIONS_CACHE.lock().await.remove(token);
   }
 
   pub async fn from_token(token: &str) -> APIResult<Self> {
-    let mut cache = db::SESSIONS_CACHE.lock().await;
+    let mut cache = SESSIONS_CACHE.lock().await;
     let user_id = cache
       .contains(token)
       .then(|| jwt::verify_token(token).map(|token| token.claims.sub))
@@ -130,11 +141,7 @@ where
 
     Ok(Self {
       id: query.get(Self::id()).cloned(),
-      folder_id: assert_valid_folder(
-        &session.user_id,
-        &query.get(Self::folder_id()).cloned(),
-      )
-      .await?,
+      folder_id: query.get(Self::folder_id()).cloned(),
       user_id: Some(session.user_id),
       name: query
         .get(Self::name())
@@ -198,59 +205,29 @@ where
   }
 }
 
-#[derive(Serialize)]
-pub struct FolderBody<T: DeserializeOwned>(pub Option<String>, pub T);
-
-#[async_trait]
-impl<S, T> FromRequest<S, Body> for FolderBody<T>
-where
-  S: Send + Sync,
-  T: DeserializeOwned,
-{
-  type Rejection = APIError;
-
-  async fn from_request(
-    mut req: Request<Body>,
-    _: &S,
-  ) -> Result<Self, Self::Rejection> {
-    let session = req.extract_parts::<Session>().await?;
-    let file_id = req.extract_parts::<FileId>().await;
-    let Json(body) = req.extract::<Json<serde_json::Value>, _>().await?;
-    let folder = body
-      .get("folder")
-      .and_then(|v| v.as_str())
-      .map(String::from);
-
-    if let Ok(FileId(file_id)) = file_id {
-      assert_writable_file(&session.user_id, &file_id, &folder).await?;
-    }
-
-    Ok(FolderBody(
-      assert_valid_folder(&session.user_id, &folder).await?,
-      serde_json::from_value(body)?,
-    ))
-  }
-}
-
 /// Asserts:
 /// * File with `folder_id` exists in files collection
 /// * File with `folder_id` is a folder
 /// * File belongs to user with `user_id`
 ///
 /// Returns the `folder_id`, if root alias is used it returns the root folder_id
-async fn assert_valid_folder(
+pub async fn assert_valid_folder(
   user_id: &str,
   folder_id: &Option<String>,
+  database: &Database,
 ) -> APIResult<Option<String>> {
   let mut result = folder_id.clone();
   if let Some(folder_id) = folder_id.as_deref() {
     let folder_id = File::map_folder_id(user_id, folder_id);
-    let folder = db::DATABASE
-      .find_by_id::<File>(folder_id)
-      .await?
-      .ok_or_else(|| {
-        APIError::BadRequest(f!("Folder with id {folder_id:?} does not exist"))
-      })?;
+    let folder =
+      database
+        .find_by_id::<File>(folder_id)
+        .await?
+        .ok_or_else(|| {
+          APIError::BadRequest(f!(
+            "Folder with id {folder_id:?} does not exist"
+          ))
+        })?;
 
     if !matches!(folder.metadata, FileMetadata::Folder) {
       return Err(APIError::BadRequest(f!(
@@ -264,36 +241,4 @@ async fn assert_valid_folder(
     result = Some(folder_id.to_string());
   }
   Ok(result)
-}
-
-async fn assert_writable_file(
-  user_id: &str,
-  file_id: &str,
-  folder_id: &Option<String>,
-) -> APIResult {
-  println!("ONE => {user_id} {file_id} {folder_id:?}");
-  if file_id == user_id {
-    return Err(APIError::UnauthorizedMessage(
-      "Root folders are read-only".to_string(),
-    ));
-  }
-
-  if let Some(folder_id) = folder_id {
-    let folder_id = File::map_folder_id(user_id, folder_id);
-    if file_id == folder_id {
-      return Err(APIError::BadRequest(
-        "A folder cannot be inside itself".to_string(),
-      ));
-    }
-    let folder = File::get_folder_children(user_id, file_id)
-      .await?
-      .ok_or_else(|| APIError::NotFound(f!("File {file_id:?} not found")))?;
-    if folder.children.contains(folder_id) {
-      return Err(APIError::BadRequest(f!(
-        "File {file_id:?} cannot be a children of it's children"
-      )));
-    }
-  }
-
-  Ok(())
 }

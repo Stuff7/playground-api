@@ -6,13 +6,13 @@ pub mod session;
 use axum::Router;
 use serde::Deserialize;
 
-use crate::AppResult;
+use crate::{AppResult, AppState};
 
 #[derive(Debug, Deserialize)]
 struct AuthorizedQuery {
   code: String,
 }
 
-pub fn api() -> AppResult<Router> {
+pub fn api() -> AppResult<Router<AppState>> {
   Ok(Router::new().nest("/google", google::api()?))
 }

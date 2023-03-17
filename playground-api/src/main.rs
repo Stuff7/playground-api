@@ -8,14 +8,18 @@ mod string;
 mod tests;
 mod websockets;
 
-use auth::session::Session;
+use auth::{google::GoogleState, session::Session};
 use console::Colorize;
+use db::{files::system::FileSystem, Database};
+use routes::files::FilesRouterState;
+use websockets::WebSocketState;
 
 use std::net::SocketAddr;
 
 use format as f;
 
 use axum::{
+  extract::FromRef,
   headers::{authorization::Bearer, Authorization},
   http::HeaderValue,
   routing::{delete, get},
@@ -28,13 +32,16 @@ use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
-  db::init("playground").await;
-  let event_channel = websockets::channel::EventChannel::new();
+  let database = Database::new("playground")
+    .await
+    .unwrap_or_exit("Could not initialize database");
+  let state =
+    AppState::new(&database).unwrap_or_exit("Could not initialize app state");
   let auth_routes =
     auth::api().unwrap_or_exit("Could not initialize auth routes.");
-  let files_api = routes::files::api(event_channel.sender.clone())
-    .unwrap_or_exit("Could not initialize video API.");
-  let websockets_api = websockets::api(event_channel.sender);
+  let files_api =
+    routes::files::api().unwrap_or_exit("Could not initialize files API.");
+  let websockets_api = websockets::api();
 
   let cors = CorsLayer::new()
     .allow_methods(tower_http::cors::Any)
@@ -51,6 +58,7 @@ async fn main() {
   } else {
     cors
   };
+
   let app = Router::new()
     .route("/logout", delete(logout))
     .route("/ping", get(ping))
@@ -58,6 +66,7 @@ async fn main() {
     .nest("/api/users", routes::users::api())
     .nest("/api/files", files_api)
     .nest("/ws", websockets_api)
+    .with_state(state)
     .layer(cors);
 
   let socket_address: SocketAddr = env_var("SOCKET_ADDRESS")
@@ -69,7 +78,7 @@ async fn main() {
 
   axum::Server::bind(&socket_address)
     .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(&database))
     .await
     .unwrap_or_exit("Failed to start server");
 }
@@ -89,7 +98,7 @@ pub fn env_var(var_name: &str) -> AppResult<String> {
   std::env::var(var_name).map_err(|_| AppError::Env(var_name.to_string()))
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(database: &Database) {
   let ctrl_c = async {
     signal::ctrl_c()
       .await
@@ -113,7 +122,7 @@ async fn shutdown_signal() {
   }
 
   log!(info@"Signal received, starting graceful shutdown");
-  db::save_sessions().await;
+  database.save_sessions().await;
   log!(success@"Graceful shutdown done!");
 }
 
@@ -133,6 +142,57 @@ where
         std::process::exit(0)
       }
     }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct AppState {
+  database: Database,
+  google: GoogleState,
+  websockets: WebSocketState,
+  files_router: FilesRouterState,
+  file_system: FileSystem,
+}
+
+impl AppState {
+  fn new(database: &Database) -> AppResult<Self> {
+    Ok(Self {
+      database: database.clone(),
+      google: GoogleState::new()?,
+      websockets: WebSocketState::new(),
+      files_router: FilesRouterState::new(),
+      file_system: FileSystem(database.clone()),
+    })
+  }
+}
+
+impl FromRef<AppState> for Database {
+  fn from_ref(state: &AppState) -> Self {
+    state.database.clone()
+  }
+}
+
+impl FromRef<AppState> for GoogleState {
+  fn from_ref(state: &AppState) -> Self {
+    state.google.clone()
+  }
+}
+
+impl FromRef<AppState> for WebSocketState {
+  fn from_ref(state: &AppState) -> Self {
+    state.websockets.clone()
+  }
+}
+
+impl FromRef<AppState> for FilesRouterState {
+  fn from_ref(state: &AppState) -> Self {
+    state.files_router.clone()
+  }
+}
+
+impl FromRef<AppState> for FileSystem {
+  fn from_ref(state: &AppState) -> Self {
+    state.file_system.clone()
   }
 }
 

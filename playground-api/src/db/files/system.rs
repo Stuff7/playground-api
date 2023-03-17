@@ -1,17 +1,32 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Deref};
 
-use mongodb::{bson::doc, options::ReturnDocument, results::UpdateResult};
+use mongodb::{
+  bson::{doc, to_document},
+  options::ReturnDocument,
+  results::UpdateResult,
+};
 use thiserror::Error;
 
 use crate::{
-  db::{files::PartialFile, save_file},
+  db::{files::PartialFile, DBResult, Database},
   string::{NonEmptyString, StringError},
 };
 
-use super::{super::DATABASE, queries::FolderChange, File};
+use super::{queries::FolderChange, File};
 
-impl File {
+#[derive(Debug, Clone)]
+pub struct FileSystem(pub Database);
+
+impl Deref for FileSystem {
+  type Target = Database;
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl FileSystem {
   pub async fn move_many(
+    &self,
     user_id: &str,
     files: &HashSet<String>,
     folder: &str,
@@ -19,23 +34,23 @@ impl File {
     if files.contains(user_id) {
       return Err(FileSystemError::ReadOnly);
     }
-    let folder = Self::map_folder_id(user_id, folder);
+    let folder = File::map_folder_id(user_id, folder);
     if files.contains(folder) {
       return Err(FileSystemError::FolderLoop);
     }
-    let query_result = Self::get_many_children(user_id, files).await?;
+    let query_result = self.get_many_children(user_id, files).await?;
     if let Some(ref result) = query_result {
       if result.children.contains(folder) {
         return Err(FileSystemError::FolderLoop);
       }
     }
 
-    let result = DATABASE
-      .update_many::<Self>(
+    let result = self
+      .update_many::<File>(
         doc! {
-          Self::folder_id(): folder,
+          File::folder_id(): folder,
         },
-        Self::query_many_by_id(user_id, files)?,
+        self.query_many_by_id(user_id, files)?,
       )
       .await?;
 
@@ -43,8 +58,8 @@ impl File {
       let mut folder_ids =
         query_result.map(|q| q.folders).unwrap_or_else(HashSet::new);
       folder_ids.insert(folder.to_string());
-      let query = Self::query_many_by_id(user_id, &folder_ids)?;
-      let changes = Self::lookup_folder_files(&query).await?;
+      let query = self.query_many_by_id(user_id, &folder_ids)?;
+      let changes = self.lookup_folder_files(&query).await?;
 
       return Ok((result, Some(changes)));
     }
@@ -52,6 +67,7 @@ impl File {
   }
 
   pub async fn update_one(
+    &self,
     user_id: &str,
     file_id: &str,
     folder: Option<String>,
@@ -60,9 +76,9 @@ impl File {
     if file_id == user_id {
       return Err(FileSystemError::ReadOnly);
     }
-    let folder = folder.map(|f| Self::map_folder_id(user_id, &f).to_string());
+    let folder = folder.map(|f| File::map_folder_id(user_id, &f).to_string());
     if let Some(ref folder) = folder {
-      let query_result = Self::get_folder_children(user_id, file_id).await?;
+      let query_result = self.get_folder_children(user_id, file_id).await?;
       if let Some(ref result) = query_result {
         if result.children.contains(folder) {
           return Err(FileSystemError::FolderLoop);
@@ -72,13 +88,13 @@ impl File {
     let update = &mut PartialFile::default();
     update.name = name.map(NonEmptyString::try_from).transpose()?;
     update.folder_id = folder.clone();
-    let update = File::query(update)?;
-    let query = File::query(&PartialFile {
+    let update = self.query(update)?;
+    let query = self.query(&PartialFile {
       id: Some(file_id.to_string()),
       user_id: Some(user_id.to_string()),
       ..Default::default()
     })?;
-    let original_file = DATABASE
+    let original_file = self
       .update::<File>(update, query, Some(ReturnDocument::Before))
       .await?
       .ok_or(FileSystemError::NotFound)?;
@@ -86,13 +102,16 @@ impl File {
       let mut ids = HashSet::new();
       ids.insert(folder);
       ids.insert(original_file.folder_id.clone());
-      File::lookup_folder_files(&File::query_many_by_id(user_id, &ids)?).await?
+      self
+        .lookup_folder_files(&self.query_many_by_id(user_id, &ids)?)
+        .await?
     } else {
-      File::lookup_folder_files(&File::query(&PartialFile {
-        id: Some(original_file.folder_id.clone()),
-        ..Default::default()
-      })?)
-      .await?
+      self
+        .lookup_folder_files(&self.query(&PartialFile {
+          id: Some(original_file.folder_id.clone()),
+          ..Default::default()
+        })?)
+        .await?
     };
 
     println!("CHANGES => {changes:#?}");
@@ -101,22 +120,31 @@ impl File {
   }
 
   pub async fn create_one(
-    user_file: &Self,
-  ) -> FileSystemResult<(Self, Vec<FolderChange>)> {
-    let new_file = save_file(user_file).await?.ok_or_else(|| {
+    &self,
+    user_file: &File,
+  ) -> FileSystemResult<(File, Vec<FolderChange>)> {
+    let new_file = self.save_one(user_file).await?.ok_or_else(|| {
       FileSystemError::NameConflict(
         user_file.name.clone(),
         user_file.folder_id.clone(),
       )
     })?;
 
-    let query = Self::query(&PartialFile {
+    let query = self.query(&PartialFile {
       id: Some(new_file.folder_id.clone()),
       ..Default::default()
     })?;
-    let changes = Self::lookup_folder_files(&query).await?;
+    let changes = self.lookup_folder_files(&query).await?;
 
     Ok((new_file.clone(), changes))
+  }
+
+  pub async fn save_one(&self, file: &File) -> DBResult<Option<File>> {
+    let mut query = &mut PartialFile::default();
+    query.user_id = Some(file.user_id.clone());
+    query.folder_id = Some(file.folder_id.clone());
+    query.name = Some(file.name.clone());
+    self.create(file, Some(to_document(query)?)).await
   }
 }
 

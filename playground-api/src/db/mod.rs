@@ -1,14 +1,17 @@
 pub mod files;
-mod models;
+pub mod users;
 
-pub use models::*;
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
-  auth::jwt::{self, JWTError},
+  auth::{
+    jwt::JWTError,
+    session::{SessionCache, SESSIONS_CACHE},
+  },
   console::Colorize,
   env_var, log,
   string::StringError,
-  GracefulExit,
+  AppError, GracefulExit,
 };
 
 use mongodb::{
@@ -20,94 +23,75 @@ use mongodb::{
   results::UpdateResult,
   Client, Cursor,
 };
-use once_cell::sync::{Lazy, OnceCell};
 use thiserror::Error;
 
 pub use mongodb::bson::doc;
 pub use mongodb::options::ReturnDocument;
 
-// First we load the database within the main async runtime
-static DATABASE_RESULT: OnceCell<Database> = OnceCell::new();
-// Then we get the database lazily, exiting the app if the database was not initialized
-pub static DATABASE: Lazy<&Database> = Lazy::new(|| {
-  DATABASE_RESULT
-    .get()
-    .ok_or(DBError::Uninitialized)
-    .unwrap_or_exit("Tried to access database before initialization")
-});
-
-pub async fn init(db_name: &str) {
-  let client_options = ClientOptions::parse_with_resolver_config(
-    env_var("MONGODB_URI").unwrap_or_exit("Could not find MongoDB URI"),
-    ResolverConfig::cloudflare(),
-  )
-  .await
-  .unwrap_or_exit("Could not parse MongoDB URI");
-
-  let client = Client::with_options(client_options)
-    .unwrap_or_exit("Could not initialize MongoDB client");
-
-  DATABASE_RESULT
-    .set(Database(client.database(db_name)))
-    .map_err(DBError::AlreadyInitialized)
-    .unwrap_or_exit("Database was initialized more than once");
-  log!(info@"Database Initialized");
-  load_sessions().await;
+pub trait Collection:
+  std::fmt::Debug
+  + Serialize
+  + DeserializeOwned
+  + Unpin
+  + Send
+  + Sync
+  + Clone
+  + 'static
+{
+  fn collection_name() -> &'static str;
+  fn id(&self) -> &str;
 }
 
-async fn load_sessions() {
-  log!(info@"Loading sessions");
-  let session = DATABASE
-    .0
-    .collection::<SessionCache>("sessions")
-    .find_one(doc! { "_id": "sessions" }, None)
-    .await
-    .ok()
-    .flatten();
-  if let Some(session) = session {
-    let sessions = session.sessions;
-    SESSIONS_CACHE.lock().await.extend(sessions);
-  }
-}
-
-pub async fn save_sessions() {
-  log!(info@"Saving sessions");
-  let upsert = UpdateOptions::builder().upsert(true).build();
-  let sessions = SESSIONS_CACHE.lock().await;
-  DATABASE
-    .0
-    .collection::<SessionCache>("sessions")
-    .update_one(
-      doc! { "_id": "sessions" },
-      doc! { "$set": { "sessions": sessions.iter().collect::<Vec<_>>() } },
-      upsert,
-    )
-    .await
-    .unwrap_or_exit("Could not save sessions to database");
-}
-
-pub async fn save_user(user: &User) -> DBResult<String> {
-  let token = jwt::sign_token(&user._id)?;
-  if let Some(user) = DATABASE.create(user, None).await? {
-    DATABASE
-      .create(&files::File::new_root_folder(user._id.clone())?, None)
-      .await?;
-  }
-  Ok(token)
-}
-
-pub async fn save_file(file: &files::File) -> DBResult<Option<&files::File>> {
-  let mut query = &mut files::PartialFile::default();
-  query.user_id = Some(file.user_id.clone());
-  query.folder_id = Some(file.folder_id.clone());
-  query.name = Some(file.name.clone());
-  DATABASE.create(file, Some(to_document(query)?)).await
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Database(mongodb::Database);
 
 impl Database {
+  pub async fn new(db_name: &str) -> DBResult<Self> {
+    let client_options = ClientOptions::parse_with_resolver_config(
+      env_var("MONGODB_URI")?,
+      ResolverConfig::cloudflare(),
+    )
+    .await?;
+
+    let client = Client::with_options(client_options)?;
+
+    let db = Self(client.database(db_name));
+    log!(info@"Database Initialized");
+    db.load_sessions().await;
+    Ok(db)
+  }
+
+  pub async fn save_sessions(&self) {
+    log!(info@"Saving sessions");
+    let upsert = UpdateOptions::builder().upsert(true).build();
+    let sessions = SESSIONS_CACHE.lock().await;
+    self
+      .0
+      .collection::<SessionCache>("sessions")
+      .update_one(
+        doc! { "_id": "sessions" },
+        doc! { "$set": { "sessions": sessions.iter().collect::<Vec<_>>() } },
+        upsert,
+      )
+      .await
+      .unwrap_or_exit("Could not save sessions to database");
+  }
+
+  async fn load_sessions(&self) {
+    log!(info@"Loading sessions");
+    let session = self
+      .0
+      .collection::<SessionCache>("sessions")
+      .find_one(doc! { "_id": "sessions" }, None)
+      .await
+      .ok()
+      .flatten();
+    if let Some(session) = session {
+      let sessions = session.sessions;
+      SESSIONS_CACHE.lock().await.extend(sessions);
+    }
+  }
+
   pub async fn find_many<T: Collection>(
     &self,
     query: Document,
@@ -210,7 +194,7 @@ impl Database {
     &self,
     doc: &'a T,
     query: Option<Document>,
-  ) -> DBResult<Option<&'a T>> {
+  ) -> DBResult<Option<T>> {
     let collection = self.collection::<T>();
     let upsert = UpdateOptions::builder().upsert(true).build();
     let result = collection
@@ -220,7 +204,7 @@ impl Database {
         upsert,
       )
       .await?;
-    Ok(result.upserted_id.is_some().then_some(doc))
+    Ok(result.upserted_id.is_some().then_some(doc.clone()))
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {
@@ -231,11 +215,9 @@ impl Database {
 #[derive(Error, Debug)]
 pub enum DBError {
   #[error(transparent)]
+  Application(#[from] AppError),
+  #[error(transparent)]
   InternalDatabase(#[from] mongodb::error::Error),
-  #[error("Database has not been initialized")]
-  Uninitialized,
-  #[error("Database has already been initialized as {0:?}")]
-  AlreadyInitialized(Database),
   #[error(transparent)]
   Jwt(#[from] JWTError),
   #[error("Error serializing bson: {0}")]
