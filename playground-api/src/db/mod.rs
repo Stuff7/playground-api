@@ -1,6 +1,8 @@
 pub mod files;
 pub mod users;
 
+use std::{collections::HashMap, time::Duration};
+
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
@@ -15,10 +17,10 @@ use crate::{
 };
 
 use mongodb::{
-  bson::{self, to_document, Document},
+  bson::{self, to_document, Bson, Document},
   options::{
-    ClientOptions, FindOneAndUpdateOptions, ReplaceOptions, ResolverConfig,
-    UpdateOptions,
+    Acknowledgment, ClientOptions, FindOneAndUpdateOptions, InsertManyOptions,
+    ReplaceOptions, ResolverConfig, UpdateOptions, WriteConcern,
   },
   results::UpdateResult,
   Client, Cursor,
@@ -204,6 +206,25 @@ impl Database {
       )
       .await?;
     Ok(result.upserted_id.is_some().then_some(doc.clone()))
+  }
+
+  /// Insert docs only if they don't exist.
+  pub async fn create_many<'a, T: Collection>(
+    &self,
+    docs: &[T],
+  ) -> DBResult<HashMap<usize, Bson>> {
+    let collection = self.collection::<T>();
+    let options = InsertManyOptions::builder()
+      .ordered(false)
+      .write_concern(
+        WriteConcern::builder()
+          .w(Acknowledgment::Majority)
+          .w_timeout(Duration::from_secs(5))
+          .build(),
+      )
+      .build();
+    let result = collection.insert_many(docs, options).await?;
+    Ok(result.inserted_ids)
   }
 
   pub fn collection<T: Collection>(&self) -> mongodb::Collection<T> {

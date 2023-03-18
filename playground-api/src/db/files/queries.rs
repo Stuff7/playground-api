@@ -71,7 +71,7 @@ impl FileSystem {
     Ok(to_document::<PartialFile>(user_file)?)
   }
 
-  pub fn query_many_by_id(
+  pub fn query_many_by_id_and_user(
     &self,
     user_id: &str,
     ids: &HashSet<String>,
@@ -79,6 +79,10 @@ impl FileSystem {
     Ok(
       doc! { File::user_id(): user_id, "_id": { "$in": to_bson::<HashSet<String>>(ids)? } },
     )
+  }
+
+  pub fn query_many_by_id(&self, ids: &[String]) -> DBResult<Document> {
+    Ok(doc! { "_id": { "$in": to_bson::<[String]>(ids)? } })
   }
 
   /// Finds nested files for the given ids and splits them into a set of _id's and a set of folder_id's

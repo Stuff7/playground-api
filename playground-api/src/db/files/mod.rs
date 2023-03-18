@@ -67,6 +67,23 @@ impl File {
     })
   }
 
+  pub fn new_folder_with_id(
+    id: String,
+    user_id: String,
+    name: String,
+    folder_id: Option<String>,
+  ) -> DBResult<Self> {
+    Ok(Self {
+      id,
+      folder_id: folder_id
+        .map(|folder_id| Self::map_folder_id(&user_id, &folder_id).to_string())
+        .unwrap_or_else(|| user_id.clone()),
+      user_id,
+      name: name.try_into()?,
+      metadata: FileMetadata::Folder,
+    })
+  }
+
   pub fn new_root_folder(user_id: String) -> DBResult<Self> {
     Ok(Self {
       id: user_id.clone(),
@@ -93,7 +110,7 @@ pub enum FileMetadata {
   Folder,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Video {
   pub name: String,

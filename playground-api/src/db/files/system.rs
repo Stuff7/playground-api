@@ -67,7 +67,7 @@ impl FileSystem {
         doc! {
           File::folder_id(): folder,
         },
-        self.query_many_by_id(user_id, files)?,
+        self.query_many_by_id_and_user(user_id, files)?,
       )
       .await?;
 
@@ -75,7 +75,7 @@ impl FileSystem {
       let mut folder_ids =
         query_result.map(|q| q.folders).unwrap_or_else(HashSet::new);
       folder_ids.insert(folder.to_string());
-      let query = self.query_many_by_id(user_id, &folder_ids)?;
+      let query = self.query_many_by_id_and_user(user_id, &folder_ids)?;
       let changes = self.lookup_folder_files(&query).await?;
 
       return Ok((result, Some(changes)));
@@ -98,11 +98,15 @@ impl FileSystem {
 
     let deleted = self
       .database
-      .delete_many::<File>(self.query_many_by_id(user_id, &result.ids)?)
+      .delete_many::<File>(
+        self.query_many_by_id_and_user(user_id, &result.ids)?,
+      )
       .await?;
 
     let changes = self
-      .lookup_folder_files(&self.query_many_by_id(user_id, &result.folder_ids)?)
+      .lookup_folder_files(
+        &self.query_many_by_id_and_user(user_id, &result.folder_ids)?,
+      )
       .await?;
 
     Ok((deleted, changes))
@@ -146,7 +150,7 @@ impl FileSystem {
       ids.insert(folder);
       ids.insert(original_file.folder_id.clone());
       self
-        .lookup_folder_files(&self.query_many_by_id(user_id, &ids)?)
+        .lookup_folder_files(&self.query_many_by_id_and_user(user_id, &ids)?)
         .await?
     } else {
       self
@@ -156,8 +160,6 @@ impl FileSystem {
         })?)
         .await?
     };
-
-    println!("CHANGES => {changes:#?}");
 
     Ok((original_file, changes))
   }
@@ -182,7 +184,7 @@ impl FileSystem {
     Ok((new_file.clone(), changes))
   }
 
-  pub async fn save_one(&self, file: &File) -> DBResult<Option<File>> {
+  async fn save_one(&self, file: &File) -> DBResult<Option<File>> {
     let mut query = &mut PartialFile::default();
     query.user_id = Some(file.user_id.clone());
     query.folder_id = Some(file.folder_id.clone());
