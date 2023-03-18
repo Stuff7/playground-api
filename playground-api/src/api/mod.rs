@@ -51,8 +51,6 @@ pub enum APIError {
   #[error("Database Error: {0}")]
   Database(#[from] DBError),
   #[error("{0}")]
-  Conflict(String),
-  #[error("{0}")]
   NotFound(String),
   #[error("Event send error: {0}")]
   EventSend(#[from] EventSendError),
@@ -66,7 +64,6 @@ impl IntoResponse for APIError {
   fn into_response(self) -> Response {
     let (status, body) = match self {
       Self::NotFound(_) => (StatusCode::NOT_FOUND, None),
-      Self::Conflict(_) => (StatusCode::CONFLICT, None),
       Self::BadRequest(_)
       | Self::BadQuery(_)
       | Self::BadPath(_)

@@ -5,7 +5,7 @@ use format as f;
 
 use crate::console::Colorize;
 use crate::db::files::system::FileSystem;
-use crate::db::files::{File, Video};
+use crate::db::files::{File, FileMetadata, Video};
 use crate::db::Database;
 use crate::{log, GracefulExit};
 
@@ -58,7 +58,7 @@ pub async fn create_nested_folders<'a>(
   } = options.unwrap_or_default();
   let files = (0..depth)
     .map(|i| {
-      File::new_folder_with_id(
+      create_folder_with_custom_id(
         f!("{prefix}-{i}"),
         USER_ID1.into(),
         f!("{prefix} {i}"),
@@ -68,7 +68,6 @@ pub async fn create_nested_folders<'a>(
           parent_id.to_string()
         }),
       )
-      .unwrap_or_exit(f!("Could not create folder {prefix}-{i}"))
     })
     .collect::<Vec<_>>();
   let ids = insert_many(database, files.as_slice()).await;
@@ -180,4 +179,21 @@ pub async fn insert_many(database: &Database, files: &[File]) -> Vec<String> {
       inserted_ids.contains(&file.id).then_some(file.id.clone())
     })
     .collect()
+}
+
+pub fn create_folder_with_custom_id(
+  id: String,
+  user_id: String,
+  name: String,
+  folder_id: Option<String>,
+) -> File {
+  File {
+    id,
+    folder_id: folder_id
+      .map(|folder_id| File::map_folder_id(&user_id, &folder_id).to_string())
+      .unwrap_or_else(|| user_id.clone()),
+    user_id,
+    name: name.try_into().unwrap_or_default(),
+    metadata: FileMetadata::Folder,
+  }
 }

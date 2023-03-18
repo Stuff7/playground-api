@@ -6,6 +6,12 @@ use thiserror::Error;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NonEmptyString(String);
 
+impl Default for NonEmptyString {
+  fn default() -> Self {
+    Self("Empty String".into())
+  }
+}
+
 impl NonEmptyString {
   fn try_from_str(s: &str) -> StringResult<Self> {
     if s.is_empty() {

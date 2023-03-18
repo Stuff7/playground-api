@@ -127,6 +127,7 @@ impl Database {
     Ok(result)
   }
 
+  #[allow(dead_code)]
   pub async fn delete<T: Collection>(
     &self,
     query: Document,
@@ -172,6 +173,7 @@ impl Database {
     Ok(result)
   }
 
+  #[allow(dead_code)]
   /// Replace doc in collection or create it if it doesn't exist.
   pub async fn replace<T: Collection>(
     &self,
@@ -208,6 +210,7 @@ impl Database {
     Ok(result.upserted_id.is_some().then_some(doc.clone()))
   }
 
+  #[allow(dead_code)]
   /// Insert docs only if they don't exist.
   pub async fn create_many<'a, T: Collection>(
     &self,

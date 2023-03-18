@@ -12,7 +12,10 @@ use crate::{
   string::{NonEmptyString, StringError},
 };
 
-use super::{queries::FolderChange, File};
+use super::{
+  queries::{query_by_file, query_many_by_id, FolderChange},
+  File,
+};
 
 #[derive(Debug, Clone)]
 pub struct FileSystem {
@@ -35,7 +38,7 @@ impl FileSystem {
     Ok(
       self
         .database
-        .find_many::<File>(self.query(query)?)
+        .find_many::<File>(query_by_file(query)?)
         .await
         .unwrap_or_default(),
     )
@@ -67,7 +70,7 @@ impl FileSystem {
         doc! {
           File::folder_id(): folder,
         },
-        self.query_many_by_id_and_user(user_id, files)?,
+        query_many_by_id(user_id, files)?,
       )
       .await?;
 
@@ -75,7 +78,7 @@ impl FileSystem {
       let mut folder_ids =
         query_result.map(|q| q.folders).unwrap_or_else(HashSet::new);
       folder_ids.insert(folder.to_string());
-      let query = self.query_many_by_id_and_user(user_id, &folder_ids)?;
+      let query = query_many_by_id(user_id, &folder_ids)?;
       let changes = self.lookup_folder_files(&query).await?;
 
       return Ok((result, Some(changes)));
@@ -98,15 +101,11 @@ impl FileSystem {
 
     let deleted = self
       .database
-      .delete_many::<File>(
-        self.query_many_by_id_and_user(user_id, &result.ids)?,
-      )
+      .delete_many::<File>(query_many_by_id(user_id, &result.ids)?)
       .await?;
 
     let changes = self
-      .lookup_folder_files(
-        &self.query_many_by_id_and_user(user_id, &result.folder_ids)?,
-      )
+      .lookup_folder_files(&query_many_by_id(user_id, &result.folder_ids)?)
       .await?;
 
     Ok((deleted, changes))
@@ -134,8 +133,8 @@ impl FileSystem {
     let update = &mut PartialFile::default();
     update.name = name.map(NonEmptyString::try_from).transpose()?;
     update.folder_id = folder.clone();
-    let update = self.query(update)?;
-    let query = self.query(&PartialFile {
+    let update = query_by_file(update)?;
+    let query = query_by_file(&PartialFile {
       id: Some(file_id.to_string()),
       user_id: Some(user_id.to_string()),
       ..Default::default()
@@ -150,11 +149,11 @@ impl FileSystem {
       ids.insert(folder);
       ids.insert(original_file.folder_id.clone());
       self
-        .lookup_folder_files(&self.query_many_by_id_and_user(user_id, &ids)?)
+        .lookup_folder_files(&query_many_by_id(user_id, &ids)?)
         .await?
     } else {
       self
-        .lookup_folder_files(&self.query(&PartialFile {
+        .lookup_folder_files(&query_by_file(&PartialFile {
           id: Some(original_file.folder_id.clone()),
           ..Default::default()
         })?)
@@ -175,7 +174,7 @@ impl FileSystem {
       )
     })?;
 
-    let query = self.query(&PartialFile {
+    let query = query_by_file(&PartialFile {
       id: Some(new_file.folder_id.clone()),
       ..Default::default()
     })?;

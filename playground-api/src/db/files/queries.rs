@@ -5,7 +5,7 @@ use format as f;
 use futures::TryStreamExt;
 use mongodb::bson::{doc, to_bson, to_document, Document};
 use partial_struct::{omit_and_create, CamelFields};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
   system::FileSystem, Collection, DBResult, File, FileMetadata, PartialFile,
@@ -57,34 +57,7 @@ pub struct ManyChildrenQueryResult {
   pub folders: HashSet<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
-#[serde(rename_all = "camelCase")]
-pub struct DirectAndAllChildrenQueryResult {
-  pub user_id: String,
-  pub folder_id: String,
-  pub all_children: HashSet<String>,
-  pub direct_children: Vec<File>,
-}
-
 impl FileSystem {
-  pub fn query(&self, user_file: &PartialFile) -> DBResult<Document> {
-    Ok(to_document::<PartialFile>(user_file)?)
-  }
-
-  pub fn query_many_by_id_and_user(
-    &self,
-    user_id: &str,
-    ids: &HashSet<String>,
-  ) -> DBResult<Document> {
-    Ok(
-      doc! { File::user_id(): user_id, "_id": { "$in": to_bson::<HashSet<String>>(ids)? } },
-    )
-  }
-
-  pub fn query_many_by_id(&self, ids: &[String]) -> DBResult<Document> {
-    Ok(doc! { "_id": { "$in": to_bson::<[String]>(ids)? } })
-  }
-
   /// Finds nested files for the given ids and splits them into a set of _id's and a set of folder_id's
   pub async fn query_nested_files(
     &self,
@@ -100,7 +73,7 @@ impl FileSystem {
         ],
         File::user_id(): user_id
       } },
-      Self::find_all_children_stage(),
+      query_all_children(),
       doc! { "$project": {
         "dupedIds": {
           "$concatArrays": [["$_id"], "$children._id"]
@@ -127,17 +100,7 @@ impl FileSystem {
       } },
     ];
 
-    let result = self
-      .database
-      .collection::<File>()
-      .aggregate(pipeline, None)
-      .await?
-      .with_type::<FileIds>()
-      .try_collect::<Vec<FileIds>>()
-      .await?;
-    let result = result.into_iter().next();
-
-    Ok(result)
+    Ok(self.aggregate::<FileIds>(pipeline).await?.pop())
   }
 
   pub async fn lookup_folder_files(
@@ -146,7 +109,7 @@ impl FileSystem {
   ) -> DBResult<Vec<FolderChange>> {
     let pipeline = vec![
       doc! { "$match": query },
-      Self::find_direct_children_stage(),
+      query_direct_children(),
       doc! { "$project": {
         "_id": 0,
         File::folder_id(): "$_id",
@@ -154,46 +117,8 @@ impl FileSystem {
         File::collection_name(): "$directChildren"
       }},
     ];
-    let changes = self
-      .database
-      .aggregate::<File>(pipeline)
-      .await?
-      .with_type::<FolderChange>()
-      .try_collect::<Vec<_>>()
-      .await?;
 
-    Ok(changes)
-  }
-
-  pub async fn get_direct_and_all_children(
-    &self,
-    user_id: &str,
-    files: &HashSet<String>,
-  ) -> DBResult<Vec<DirectAndAllChildrenQueryResult>> {
-    let pipeline = vec![
-      doc! { "$match": {
-        "_id": { "$in": to_bson::<HashSet<String>>(files)? },
-        File::user_id(): user_id,
-      } },
-      Self::find_all_children_stage(),
-      Self::find_direct_children_stage(),
-      doc! { "$project": {
-        "_id": 0,
-        File::folder_id(): "$_id",
-        File::user_id(): 1,
-        "allChildren": "$children._id",
-        "directChildren": 1,
-      }},
-    ];
-    let changes = self
-      .database
-      .aggregate::<File>(pipeline)
-      .await?
-      .with_type::<DirectAndAllChildrenQueryResult>()
-      .try_collect::<Vec<_>>()
-      .await?;
-
-    Ok(changes)
+    self.aggregate::<FolderChange>(pipeline).await
   }
 
   pub async fn get_folder_family(
@@ -202,12 +127,9 @@ impl FileSystem {
     folder_id: &str,
   ) -> DBResult<Option<FolderFamily>> {
     let pipeline = vec![
-      doc! { "$match": {
-        "_id": File::map_folder_id(user_id, folder_id),
-        File::user_id(): user_id
-      } },
-      Self::find_all_parents_stage(),
-      Self::find_direct_children_stage(),
+      doc! { "$match": query_by_id(user_id, folder_id)? },
+      query_all_parents(),
+      query_direct_children(),
       doc! { "$project": {
         "_id": 1,
         File::name(): 1,
@@ -221,21 +143,14 @@ impl FileSystem {
       } },
     ];
 
-    let family = self
-      .database
-      .aggregate::<File>(pipeline)
-      .await?
-      .with_type::<FolderFamily>()
-      .try_next()
-      .await?
-      .map(|mut family| {
+    Ok(self.aggregate::<FolderFamily>(pipeline).await?.pop().map(
+      |mut family| {
         family
           .parents
           .sort_by_key(|d| (d.id.clone(), d.folder_id.clone()));
         family
-      });
-
-    Ok(family)
+      },
+    ))
   }
 
   pub async fn get_folder_children(
@@ -244,11 +159,8 @@ impl FileSystem {
     folder_id: &str,
   ) -> DBResult<Option<FolderChildren>> {
     let pipeline = vec![
-      doc! { "$match": {
-        "_id": folder_id,
-        File::user_id(): user_id,
-      } },
-      Self::find_all_children_stage(),
+      doc! { "$match": query_by_id(user_id, folder_id)? },
+      query_all_children(),
       doc! { "$project": {
         "_id": 1,
         "metadata": 1,
@@ -257,15 +169,7 @@ impl FileSystem {
       } },
     ];
 
-    Ok(
-      self
-        .database
-        .aggregate::<File>(pipeline)
-        .await?
-        .with_type::<FolderChildren>()
-        .try_next()
-        .await?,
-    )
+    Ok(self.aggregate::<FolderChildren>(pipeline).await?.pop())
   }
 
   // Gets all children for any of the `files` and their direct folders
@@ -275,11 +179,8 @@ impl FileSystem {
     files: &HashSet<String>,
   ) -> DBResult<Option<ManyChildrenQueryResult>> {
     let pipeline = vec![
-      doc! { "$match": {
-        "_id": { "$in": to_bson::<HashSet<String>>(files)? },
-        File::user_id(): user_id,
-      } },
-      Self::find_all_children_stage(),
+      doc! { "$match": query_many_by_id(user_id, files)? },
+      query_all_children(),
       doc! { "$addFields": { "children": { "$cond": {
         "if": { "$eq": [ { "$size": "$children" }, 0 ] },
         "then": [null],
@@ -300,51 +201,80 @@ impl FileSystem {
 
     Ok(
       self
-        .database
-        .aggregate::<File>(pipeline)
+        .aggregate::<ManyChildrenQueryResult>(pipeline)
         .await?
-        .with_type::<ManyChildrenQueryResult>()
-        .try_next()
-        .await?,
+        .pop(),
     )
   }
 
-  fn find_all_children_stage() -> Document {
-    doc! { "$graphLookup": {
-      "from": File::collection_name(),
-      "startWith": "$_id",
-      "connectFromField": "_id",
-      "connectToField": File::folder_id(),
-      "as": "children",
-      "maxDepth": 99,
-    } }
+  async fn aggregate<T: DeserializeOwned + Unpin + Send + Sync>(
+    &self,
+    pipeline: impl IntoIterator<Item = Document>,
+  ) -> DBResult<Vec<T>> {
+    Ok(
+      self
+        .database
+        .aggregate::<File>(pipeline)
+        .await?
+        .with_type::<T>()
+        .try_collect::<Vec<T>>()
+        .await?,
+    )
   }
+}
 
-  fn find_all_parents_stage() -> Document {
-    doc! { "$graphLookup": {
-      "from": File::collection_name(),
-      "startWith": f!("${}", File::folder_id()),
-      "connectFromField": File::folder_id(),
-      "connectToField": "_id",
-      "as": "parents",
-      "maxDepth": 99,
-      "restrictSearchWithMatch": { "metadata.type": "folder" }
-    } }
-  }
+fn query_all_children() -> Document {
+  doc! { "$graphLookup": {
+    "from": File::collection_name(),
+    "startWith": "$_id",
+    "connectFromField": "_id",
+    "connectToField": File::folder_id(),
+    "as": "children",
+    "maxDepth": 99,
+  } }
+}
 
-  fn find_direct_children_stage() -> Document {
-    doc! { "$lookup": {
-      "from": File::collection_name(),
-      "pipeline": [
-        { "$addFields": {
-          "insensitiveName": { "$toLower": f!("${}", File::name()) },
-        } },
-        { "$sort": { "insensitiveName": 1 } },
-        { "$project": { "insensitiveName": 0 } }
-      ],
-      "localField": "_id",
-      "foreignField": File::folder_id(),
-      "as": "directChildren",
-    } }
-  }
+fn query_all_parents() -> Document {
+  doc! { "$graphLookup": {
+    "from": File::collection_name(),
+    "startWith": f!("${}", File::folder_id()),
+    "connectFromField": File::folder_id(),
+    "connectToField": "_id",
+    "as": "parents",
+    "maxDepth": 99,
+    "restrictSearchWithMatch": { "metadata.type": "folder" }
+  } }
+}
+
+fn query_direct_children() -> Document {
+  doc! { "$lookup": {
+    "from": File::collection_name(),
+    "pipeline": [
+      { "$addFields": {
+        "insensitiveName": { "$toLower": f!("${}", File::name()) },
+      } },
+      { "$sort": { "insensitiveName": 1 } },
+      { "$project": { "insensitiveName": 0 } }
+    ],
+    "localField": "_id",
+    "foreignField": File::folder_id(),
+    "as": "directChildren",
+  } }
+}
+
+pub fn query_by_file(file: &PartialFile) -> DBResult<Document> {
+  Ok(to_document::<PartialFile>(file)?)
+}
+
+pub fn query_by_id(user_id: &str, id: &str) -> DBResult<Document> {
+  Ok(doc! { File::user_id(): user_id, "_id": File::map_folder_id(user_id, id) })
+}
+
+pub fn query_many_by_id(
+  user_id: &str,
+  ids: &HashSet<String>,
+) -> DBResult<Document> {
+  Ok(
+    doc! { File::user_id(): user_id, "_id": { "$in": to_bson::<HashSet<String>>(ids)? } },
+  )
 }
