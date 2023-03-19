@@ -1,17 +1,15 @@
-use axum::{
-  http::{HeaderMap, HeaderValue},
-  response::IntoResponse,
-};
-use once_cell::sync::Lazy;
-use reqwest::StatusCode;
-use serde::de::DeserializeOwned;
-
 use crate::{
   api::{APIError, APIResult},
   env_var,
 };
-
+use axum::{
+  http::{HeaderMap, HeaderValue},
+  response::IntoResponse,
+};
 use format as f;
+use once_cell::sync::Lazy;
+use reqwest::StatusCode;
+use serde::de::DeserializeOwned;
 
 fn mebibytes(var_name: &str, default: usize) -> usize {
   env_var(var_name)

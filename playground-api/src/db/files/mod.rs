@@ -1,14 +1,12 @@
+pub mod aggregations;
 pub mod queries;
 pub mod system;
 
-use crate::string::NonEmptyString;
-
-use mongodb::bson::{doc, oid::ObjectId};
-use serde::{Deserialize, Serialize};
-
-use partial_struct::{partial, CamelFields};
-
 use super::{Collection, DBResult};
+use crate::string::NonEmptyString;
+use mongodb::bson::{doc, oid::ObjectId};
+use partial_struct::{partial, CamelFields};
+use serde::{Deserialize, Serialize};
 
 pub const ROOT_FOLDER_ALIAS: &str = "root";
 

@@ -1,18 +1,14 @@
-use crate::api::APIError;
-use crate::api::APIResult;
-use crate::db::users::save_user;
-use crate::db::users::User;
-use crate::db::Database;
-use crate::env_var;
-use crate::http::json_response;
-use crate::http::JsonResult;
-use crate::AppResult;
-use crate::AppState;
-
-use super::oauth::Token;
-use super::session::Session;
-use super::AuthorizedQuery;
-
+use super::{oauth::Token, session::Session, AuthorizedQuery};
+use crate::{
+  api::{APIError, APIResult},
+  db::{
+    users::{save_user, User},
+    Database,
+  },
+  env_var,
+  http::{json_response, JsonResult},
+  AppResult, AppState,
+};
 use format as f;
 
 use axum::{

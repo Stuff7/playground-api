@@ -1,12 +1,9 @@
-use std::collections::HashSet;
-
-use axum::extract::ws::Message;
-
-use crate::{console::Colorize, log};
-
 use super::channel::{
   EventMessage, EventReceiver, EventSender, SocketMessage, SocketSender,
 };
+use crate::{console::Colorize, log};
+use axum::extract::ws::Message;
+use std::collections::HashSet;
 
 pub enum Event {
   Add(EventType),

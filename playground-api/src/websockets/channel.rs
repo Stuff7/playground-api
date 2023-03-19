@@ -1,7 +1,5 @@
-use crate::db::files::queries::FolderChange;
-
 use super::event::EventExitRequest;
-
+use crate::db::files::aggregations::FolderWithChildren;
 use axum::extract::ws::Message;
 use tokio::sync::broadcast;
 
@@ -20,7 +18,7 @@ impl<T: Clone> BroadcastChannel<T> {
 
 #[derive(Debug, Clone)]
 pub enum EventMessage {
-  FolderChange(FolderChange),
+  FolderChange(FolderWithChildren),
   Exit(EventExitRequest),
 }
 

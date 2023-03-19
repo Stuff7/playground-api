@@ -1,6 +1,5 @@
-use std::ops::Deref;
-
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use thiserror::Error;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

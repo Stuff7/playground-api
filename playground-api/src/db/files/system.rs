@@ -1,21 +1,19 @@
-use std::collections::HashSet;
-
+use super::{
+  aggregations::FolderWithChildren,
+  queries::{query_by_file, query_many_by_id},
+  File,
+};
+use crate::{
+  db::{files::PartialFile, DBResult, Database},
+  string::{NonEmptyString, StringError},
+};
 use mongodb::{
   bson::{doc, to_document},
   options::ReturnDocument,
   results::UpdateResult,
 };
+use std::collections::HashSet;
 use thiserror::Error;
-
-use crate::{
-  db::{files::PartialFile, DBResult, Database},
-  string::{NonEmptyString, StringError},
-};
-
-use super::{
-  queries::{query_by_file, query_many_by_id, FolderChange},
-  File,
-};
 
 #[derive(Debug, Clone)]
 pub struct FileSystem {
@@ -49,7 +47,7 @@ impl FileSystem {
     user_id: &str,
     files: &HashSet<String>,
     folder: &str,
-  ) -> FileSystemResult<(UpdateResult, Option<Vec<FolderChange>>)> {
+  ) -> FileSystemResult<(UpdateResult, Option<Vec<FolderWithChildren>>)> {
     if files.contains(user_id) {
       return Err(FileSystemError::ReadOnly);
     }
@@ -57,9 +55,9 @@ impl FileSystem {
     if files.contains(folder) {
       return Err(FileSystemError::FolderLoop);
     }
-    let query_result = self.get_many_children(user_id, files).await?;
+    let query_result = self.find_lineage_and_parents(user_id, files).await?;
     if let Some(ref result) = query_result {
-      if result.children.contains(folder) {
+      if result.lineage.contains(folder) {
         return Err(FileSystemError::FolderLoop);
       }
     }
@@ -75,11 +73,10 @@ impl FileSystem {
       .await?;
 
     if result.modified_count > 0 {
-      let mut folder_ids =
-        query_result.map(|q| q.folders).unwrap_or_else(HashSet::new);
+      let mut folder_ids = query_result.map(|q| q.parents).unwrap_or_default();
       folder_ids.insert(folder.to_string());
       let query = query_many_by_id(user_id, &folder_ids)?;
-      let changes = self.lookup_folder_files(&query).await?;
+      let changes = self.find_folder_with_children(&query).await?;
 
       return Ok((result, Some(changes)));
     }
@@ -90,22 +87,22 @@ impl FileSystem {
     &self,
     user_id: &str,
     ids: &HashSet<String>,
-  ) -> FileSystemResult<(u64, Vec<FolderChange>)> {
+  ) -> FileSystemResult<(u64, Vec<FolderWithChildren>)> {
     if ids.contains(user_id) {
       return Err(FileSystemError::ReadOnly);
     }
-
-    let Some(result) = self.query_nested_files(user_id, ids).await? else {
+    // find nested files and it's parents
+    let Some(result) = self.find_lineage_with_parents(user_id, ids).await? else {
       return Ok((0, Vec::new()))
     };
 
     let deleted = self
       .database
-      .delete_many::<File>(query_many_by_id(user_id, &result.ids)?)
+      .delete_many::<File>(query_many_by_id(user_id, &result.lineage)?)
       .await?;
 
     let changes = self
-      .lookup_folder_files(&query_many_by_id(user_id, &result.folder_ids)?)
+      .find_folder_with_children(&query_many_by_id(user_id, &result.parents)?)
       .await?;
 
     Ok((deleted, changes))
@@ -117,15 +114,14 @@ impl FileSystem {
     file_id: &str,
     folder: Option<String>,
     name: Option<String>,
-  ) -> FileSystemResult<(File, Vec<FolderChange>)> {
+  ) -> FileSystemResult<(File, Vec<FolderWithChildren>)> {
     if file_id == user_id {
       return Err(FileSystemError::ReadOnly);
     }
     let folder = folder.map(|f| File::map_folder_id(user_id, &f).to_string());
     if let Some(ref folder) = folder {
-      let query_result = self.get_folder_children(user_id, file_id).await?;
-      if let Some(ref result) = query_result {
-        if result.children.contains(folder) {
+      if let Some(lineage) = self.find_lineage(user_id, file_id).await? {
+        if lineage.contains(folder) {
           return Err(FileSystemError::FolderLoop);
         }
       }
@@ -149,11 +145,11 @@ impl FileSystem {
       ids.insert(folder);
       ids.insert(original_file.folder_id.clone());
       self
-        .lookup_folder_files(&query_many_by_id(user_id, &ids)?)
+        .find_folder_with_children(&query_many_by_id(user_id, &ids)?)
         .await?
     } else {
       self
-        .lookup_folder_files(&query_by_file(&PartialFile {
+        .find_folder_with_children(&query_by_file(&PartialFile {
           id: Some(original_file.folder_id.clone()),
           ..Default::default()
         })?)
@@ -166,7 +162,7 @@ impl FileSystem {
   pub async fn create_one(
     &self,
     user_file: &File,
-  ) -> FileSystemResult<(File, Vec<FolderChange>)> {
+  ) -> FileSystemResult<(File, Vec<FolderWithChildren>)> {
     let new_file = self.save_one(user_file).await?.ok_or_else(|| {
       FileSystemError::NameConflict(
         user_file.name.clone(),
@@ -178,7 +174,7 @@ impl FileSystem {
       id: Some(new_file.folder_id.clone()),
       ..Default::default()
     })?;
-    let changes = self.lookup_folder_files(&query).await?;
+    let changes = self.find_folder_with_children(&query).await?;
 
     Ok((new_file.clone(), changes))
   }

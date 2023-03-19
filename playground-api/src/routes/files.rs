@@ -1,11 +1,9 @@
-use std::collections::HashSet;
-
 use crate::{
   api::{self, APIError, APIResult},
   auth::session::{FileId, FileIdVecQuery, Session},
   console::Colorize,
   db::files::{
-    queries::{FolderChange, FolderFamily},
+    aggregations::{FolderChildrenAndAncestors, FolderWithChildren},
     system::FileSystem,
     File, PartialFile, Video,
   },
@@ -17,16 +15,15 @@ use crate::{
   },
   AppResult, AppState,
 };
-
 use axum::{
   extract::{Path, Query, State},
   http::HeaderMap,
   response::IntoResponse,
+  routing, Json, Router,
 };
-use axum::{routing, Json, Router};
-use serde::{Deserialize, Serialize};
-
 use format as f;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct FilesRouterState {
@@ -80,10 +77,10 @@ pub async fn get_folder_family(
   session: Session,
   State(file_system): State<FileSystem>,
   Path(folder_id): Path<String>,
-) -> APIResult<Json<FolderFamily>> {
+) -> APIResult<Json<FolderChildrenAndAncestors>> {
   Ok(Json(
     file_system
-      .get_folder_family(&session.user_id, &folder_id)
+      .find_children_and_ancestors(&session.user_id, &folder_id)
       .await?
       .ok_or_else(|| {
         APIError::NotFound(f!("Folder with id {folder_id:?} not found"))
@@ -271,7 +268,7 @@ fn extract_drive_file_id(share_link: &str) -> Option<String> {
 
 fn send_folder_changes(
   event_sender: &EventSender,
-  changes: Vec<FolderChange>,
+  changes: Vec<FolderWithChildren>,
 ) -> APIResult {
   if event_sender.receiver_count() == 0 {
     log!(info@"There's {} folder changes but no one's listening. Message will not be sent", changes.len());

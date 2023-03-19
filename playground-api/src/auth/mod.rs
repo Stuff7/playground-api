@@ -3,10 +3,9 @@ pub mod jwt;
 pub mod oauth;
 pub mod session;
 
+use crate::{AppResult, AppState};
 use axum::Router;
 use serde::Deserialize;
-
-use crate::{AppResult, AppState};
 
 #[derive(Debug, Deserialize)]
 struct AuthorizedQuery {

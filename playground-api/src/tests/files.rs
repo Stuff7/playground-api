@@ -1,17 +1,14 @@
 #![cfg(test)]
-use std::collections::HashSet;
-
+use super::{
+  cleanup_files_collection, create_dummy_folder_structure,
+  create_nested_folders, get_database, NestedFolderOptions, USER_ID1,
+};
+use crate::{
+  db::files::{system::FileSystemError, ROOT_FOLDER_ALIAS},
+  GracefulExit,
+};
 use format as f;
-
-use super::cleanup_files_collection;
-use super::create_dummy_folder_structure;
-use super::create_nested_folders;
-use super::get_database;
-use super::NestedFolderOptions;
-use super::USER_ID1;
-use crate::db::files::system::FileSystemError;
-use crate::db::files::ROOT_FOLDER_ALIAS;
-use crate::GracefulExit;
+use std::collections::HashSet;
 
 #[tokio::test]
 async fn it_fails_to_move_folder_inside_itself() {
@@ -79,7 +76,7 @@ async fn it_moves_files_successfully() {
   for change in changes {
     if change.folder_id == USER_ID1 {
       let files = change
-        .files
+        .children
         .iter()
         .map(|file| file.id.clone())
         .collect::<HashSet<_>>();
@@ -91,9 +88,9 @@ async fn it_moves_files_successfully() {
     }
     if &change.folder_id == id1 || &change.folder_id == id2 {
       assert!(
-        change.files.is_empty(),
+        change.children.is_empty(),
         "Expected folder change to be empty, instead got {:?}",
-        change.files
+        change.children
       );
       continue;
     }
@@ -155,7 +152,7 @@ async fn it_deletes_files_successfully() {
   );
   for change in changes {
     let files = change
-      .files
+      .children
       .iter()
       .map(|file| file.id.clone())
       .collect::<HashSet<_>>();
@@ -273,7 +270,7 @@ async fn it_updates_file_successfully() {
     };
     for change in changes {
       let files = change
-        .files
+        .children
         .iter()
         .map(|file| file.id.clone())
         .collect::<HashSet<_>>();

@@ -1,9 +1,7 @@
+use super::{files::File, Collection, DBResult, Database};
+use crate::auth::jwt;
 use mongodb::bson::doc;
 use serde::{Deserialize, Serialize};
-
-use crate::auth::jwt;
-
-use super::{files::File, Collection, DBResult, Database};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]

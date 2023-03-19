@@ -1,10 +1,6 @@
 pub mod files;
 pub mod users;
 
-use std::{collections::HashMap, time::Duration};
-
-use serde::{de::DeserializeOwned, Serialize};
-
 use crate::{
   auth::{
     jwt::JWTError,
@@ -15,20 +11,19 @@ use crate::{
   string::StringError,
   AppError, GracefulExit,
 };
-
 use mongodb::{
-  bson::{self, to_document, Bson, Document},
+  bson::{self, doc, to_document, Bson, Document},
   options::{
     Acknowledgment, ClientOptions, FindOneAndUpdateOptions, InsertManyOptions,
-    ReplaceOptions, ResolverConfig, UpdateOptions, WriteConcern,
+    ReplaceOptions, ResolverConfig, ReturnDocument, UpdateOptions,
+    WriteConcern,
   },
   results::UpdateResult,
   Client, Cursor,
 };
+use serde::{de::DeserializeOwned, Serialize};
+use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
-
-pub use mongodb::bson::doc;
-pub use mongodb::options::ReturnDocument;
 
 pub trait Collection:
   std::fmt::Debug

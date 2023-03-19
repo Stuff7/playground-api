@@ -2,7 +2,6 @@ use crate::auth::session::Session;
 use crate::db::users::User;
 use crate::db::Database;
 use crate::{api::APIResult, AppState};
-
 use axum::extract::State;
 use axum::{routing::get, Json, Router};
 

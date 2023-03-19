@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-
+use super::jwt;
 use crate::{
   api::{APIError, APIResult},
   db::{
@@ -10,7 +9,6 @@ use crate::{
   string::NonEmptyString,
   GracefulExit,
 };
-
 use axum::{
   async_trait,
   extract::{FromRequestParts, Path, Query, TypedHeader},
@@ -20,9 +18,8 @@ use axum::{
 };
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::Mutex;
-
-use super::jwt;
 
 pub static SESSIONS_CACHE: Lazy<Mutex<HashSet<String>>> =
   Lazy::new(|| Mutex::new(HashSet::new()));

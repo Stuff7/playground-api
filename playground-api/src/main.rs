@@ -9,15 +9,6 @@ mod tests;
 mod websockets;
 
 use auth::{google::GoogleState, session::Session};
-use console::Colorize;
-use db::{files::system::FileSystem, Database};
-use routes::files::FilesRouterState;
-use websockets::WebSocketState;
-
-use std::net::SocketAddr;
-
-use format as f;
-
 use axum::{
   extract::FromRef,
   headers::{authorization::Bearer, Authorization},
@@ -25,10 +16,16 @@ use axum::{
   routing::{delete, get},
   Router, TypedHeader,
 };
+use console::Colorize;
+use db::{files::system::FileSystem, Database};
+use format as f;
 use reqwest::StatusCode;
+use routes::files::FilesRouterState;
+use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::signal;
 use tower_http::cors::CorsLayer;
+use websockets::WebSocketState;
 
 #[tokio::main]
 async fn main() {

@@ -5,11 +5,6 @@ use crate::{
   auth::session::SessionQuery, console::Colorize, db::DBError, log,
   websockets::channel::SocketMessage, AppState,
 };
-
-use std::borrow::Cow;
-use std::net::SocketAddr;
-use std::ops::ControlFlow;
-
 use axum::{
   extract::{
     connect_info::ConnectInfo,
@@ -20,21 +15,17 @@ use axum::{
   routing::get,
   Router,
 };
-
+use channel::{
+  EventChannel, EventSender, SocketChannel, SocketReceiver, SocketSender,
+};
+use event::EventManager;
 use futures::{
   sink::SinkExt,
   stream::{SplitSink, SplitStream, StreamExt},
 };
-
+use std::{borrow::Cow, net::SocketAddr, ops::ControlFlow};
 use thiserror::Error;
 use tokio::task::JoinHandle;
-
-use self::{
-  channel::{
-    EventChannel, EventSender, SocketChannel, SocketReceiver, SocketSender,
-  },
-  event::EventManager,
-};
 
 #[derive(Debug, Clone)]
 pub struct WebSocketState {

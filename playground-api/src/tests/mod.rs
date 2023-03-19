@@ -1,14 +1,15 @@
 #![cfg(test)]
 mod files;
 
+use crate::{
+  console::Colorize,
+  db::{
+    files::{system::FileSystem, File, FileMetadata, Video},
+    Database,
+  },
+  log, GracefulExit,
+};
 use format as f;
-
-use crate::console::Colorize;
-use crate::db::files::system::FileSystem;
-use crate::db::files::{File, FileMetadata, Video};
-use crate::db::Database;
-use crate::{log, GracefulExit};
-
 use mongodb::bson::doc;
 
 pub const USER_ID1: &str = "google@test1";

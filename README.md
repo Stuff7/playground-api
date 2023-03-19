@@ -38,10 +38,10 @@ interface User {
 
 </span>
 
-<span id="UserFile">
+<span id="File">
 
 ```typescript
-interface UserFile {
+interface File {
   _id: string,
   folderId: string,
   userId: string,
@@ -174,7 +174,7 @@ GET /api/files
 
 #### **Response**
 
-[`UserFile`](#UserFile) list
+[`File`](#File) list
 
 </br>
 
@@ -199,7 +199,7 @@ interface UpdateFileBody {
 
 #### **Response**
 
-Updated [`UserFile`](#UserFile)
+Updated [`File`](#File)
 
 </br>
 
@@ -261,7 +261,7 @@ interface CreateFolderBody {
 
 #### **Response**
 
-The created [`UserFile`](#UserFile) or a 409 Conflict HTTP status error if a folder with the same name already exists in that folder
+The created [`File`](#File) or a 409 Conflict HTTP status error if a folder with the same name already exists in that folder
 
 </br>
 
@@ -363,7 +363,7 @@ interface CreateVideoBody {
 
 #### **Response**
 
-The created [`UserFile`](#UserFile) or a 409 Conflict HTTP status error if a video with the same name already exists in that folder
+The created [`File`](#File) or a 409 Conflict HTTP status error if a video with the same name already exists in that folder
 
 </br>
 

@@ -1,17 +1,13 @@
+use super::{APIError, APIResult};
 use crate::{
   env_var,
   http::{json_response, JsonResult},
   GracefulExit,
 };
-
-use super::{APIError, APIResult};
-
-use std::{fmt::Display, str::FromStr};
-
+use format as f;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use format as f;
+use std::{fmt::Display, str::FromStr};
 
 const DRIVE_API: &str = "https://www.googleapis.com/drive/v3";
 const DRIVE_FILE_FIELDS: &str = "name,size,videoMediaMetadata,mimeType";

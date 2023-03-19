@@ -1,11 +1,11 @@
-use std::fmt::Debug;
-
 use crate::GracefulExit;
-
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{
+  decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation,
+};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JWTError {
@@ -32,7 +32,8 @@ impl Keys {
 }
 
 static KEYS: Lazy<Keys> = Lazy::new(|| {
-  let secret = crate::env_var("JWT_SECRET").unwrap_or_exit("JWT_SECRET must be set");
+  let secret =
+    crate::env_var("JWT_SECRET").unwrap_or_exit("JWT_SECRET must be set");
   Keys::new(secret.as_bytes())
 });
 
