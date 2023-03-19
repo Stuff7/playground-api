@@ -2,12 +2,11 @@ extern crate proc_macro;
 
 mod structs;
 
+use format as f;
 use proc_macro2::TokenStream;
 use quote::{__private::Span, quote, ToTokens};
 use structs::camel_case;
 use syn::{self, Ident};
-
-use format as f;
 
 #[proc_macro_attribute]
 pub fn partial(
@@ -15,7 +14,8 @@ pub fn partial(
   input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
   let input: TokenStream = input.into();
-  let derive_input = syn::parse(input.clone().into()).expect("syn::parse failed");
+  let derive_input =
+    syn::parse(input.clone().into()).expect("syn::parse failed");
   let mut fields_vec = Vec::new();
   let structs::StructParts {
     attrs,
@@ -123,7 +123,8 @@ pub fn omit_and_create(
     fields,
     ..
   } = structs::get_struct_parts(&derive_input, &mut fields_vec);
-  let derive = TokenStream::from_iter(attrs.iter().map(|a| a.into_token_stream()));
+  let derive =
+    TokenStream::from_iter(attrs.iter().map(|a| a.into_token_stream()));
 
   let fields_omit = fields.iter().filter_map(|(vis, ident, ty, attrs)| {
     let attrs = structs::attrs_to_token_stream(attrs);

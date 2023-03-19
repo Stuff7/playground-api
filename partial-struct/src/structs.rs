@@ -1,8 +1,9 @@
-use std::ops::Deref;
-
 use proc_macro2::TokenStream;
 use quote::ToTokens;
-use syn::{self, Attribute, DeriveInput, Fields, Ident, ImplGenerics, Type, Visibility};
+use std::ops::Deref;
+use syn::{
+  self, Attribute, DeriveInput, Fields, Ident, ImplGenerics, Type, Visibility,
+};
 
 type FieldsVec = Vec<(Visibility, Ident, Type, Vec<Attribute>)>;
 
@@ -54,7 +55,10 @@ pub fn attrs_to_token_stream(attrs: &[Attribute]) -> TokenStream {
   TokenStream::from_iter(attrs.iter().map(|attr| attr.into_token_stream()))
 }
 
-fn filter_fields<'a>(fields: &'a Fields, fields_vec: &'a mut FieldsVec) -> &'a FieldsVec {
+fn filter_fields<'a>(
+  fields: &'a Fields,
+  fields_vec: &'a mut FieldsVec,
+) -> &'a FieldsVec {
   fields_vec.extend(fields.into_iter().filter_map(|field| {
     if field.ident.is_some() {
       let field_vis = field.vis.clone();
