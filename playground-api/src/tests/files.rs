@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
   db::files::{system::FileSystemError, ROOT_FOLDER_ALIAS},
+  tests::{fill_folder, FillFolderOptions},
   GracefulExit,
 };
 use format as f;
@@ -69,12 +70,12 @@ async fn it_moves_files_successfully() {
   };
   for id in [USER_ID1, id1, id2] {
     assert!(
-      changes.iter().any(|change| change.folder_id == id),
+      changes.iter().any(|change| change.id == id),
       "Expected changes to contain {id} but it did not.\n\nChanges => {changes:#?}"
     );
   }
   for change in changes {
-    if change.folder_id == USER_ID1 {
+    if change.id == USER_ID1 {
       let files = change
         .children
         .iter()
@@ -86,7 +87,7 @@ async fn it_moves_files_successfully() {
       );
       continue;
     }
-    if &change.folder_id == id1 || &change.folder_id == id2 {
+    if &change.id == id1 || &change.id == id2 {
       assert!(
         change.children.is_empty(),
         "Expected folder change to be empty, instead got {:?}",
@@ -128,7 +129,7 @@ async fn it_deletes_files_successfully() {
   cleanup_files_collection(&database).await;
   assert!(
     deleted_count == 5,
-    "Expected to delete 4 files, instead deleted {deleted_count}"
+    "Expected to delete 5 files, instead deleted {deleted_count}"
   );
   let change_count = changes.len();
   assert!(
@@ -139,15 +140,15 @@ async fn it_deletes_files_successfully() {
   let change_two = ids_two[1].clone();
   let change_three = ids_one[0].clone();
   assert!(
-    changes.iter().any(|c| c.folder_id == change_one),
+    changes.iter().any(|c| c.id == change_one),
     "Expected folder changes to include change one {change_one}",
   );
   assert!(
-    changes.iter().any(|c| c.folder_id == change_two),
+    changes.iter().any(|c| c.id == change_two),
     "Expected folder changes to include change two {change_two}",
   );
   assert!(
-    changes.iter().any(|c| c.folder_id == change_three),
+    changes.iter().any(|c| c.id == change_three),
     "Expected folder changes to include change three {change_three}",
   );
   for change in changes {
@@ -156,7 +157,7 @@ async fn it_deletes_files_successfully() {
       .iter()
       .map(|file| file.id.clone())
       .collect::<HashSet<_>>();
-    if change.folder_id == change_one {
+    if change.id == change_one {
       let set = vec![ids_three[0].clone()]
         .iter()
         .map(String::from)
@@ -167,14 +168,14 @@ async fn it_deletes_files_successfully() {
       );
       continue;
     }
-    if change.folder_id == change_two {
+    if change.id == change_two {
       assert!(
         files.is_empty(),
         "Expected folder change to be empty, instead got {files:?}"
       );
       continue;
     }
-    if change.folder_id == change_three {
+    if change.id == change_three {
       let set = vec![
         file_ids[1].clone(),
         file_ids[2].clone(),
@@ -274,21 +275,21 @@ async fn it_updates_file_successfully() {
         .iter()
         .map(|file| file.id.clone())
         .collect::<HashSet<_>>();
-      if change.folder_id == USER_ID1 {
+      if change.id == USER_ID1 {
         assert!(
           files.eq(&vec![new_folders[0].clone()].into_iter().collect()),
           "Expected folder change to be {ids_set:?}, instead got {files:?}"
         );
         continue;
       }
-      if change.folder_id == old_folder {
+      if change.id == old_folder {
         assert!(
           files.is_empty(),
           "Expected folder change to be empty, instead got {files:?}"
         );
         continue;
       }
-      if change.folder_id == new_folder {
+      if change.id == new_folder {
         ids_set.insert(id.clone());
         assert!(
           files.eq(&ids_set),
@@ -298,4 +299,63 @@ async fn it_updates_file_successfully() {
     }
   }
   cleanup_files_collection(&database).await;
+}
+
+#[tokio::test]
+async fn it_finds_children_and_ancestors() {
+  let (file_sys, database) = get_database().await;
+  let (ids_one, ids_two, ..) = create_dummy_folder_structure(&database).await;
+  let folder_id = &ids_two[2];
+
+  let options = FillFolderOptions {
+    prefix: "FileTwo",
+    count: 4,
+    parent_id: folder_id,
+  };
+  let mut children = fill_folder(&database, Some(options))
+    .await
+    .into_iter()
+    .collect::<HashSet<_>>();
+  let result = file_sys
+    .find_children_and_ancestors(USER_ID1, folder_id)
+    .await
+    .unwrap_or_exit("Failed to find children and ancestors")
+    .unwrap();
+  cleanup_files_collection(&database).await;
+
+  let result_id = &result.id;
+  assert!(
+    result_id == folder_id,
+    "Expected children and ancestors folder to be {folder_id:?}, instead got {result_id:?}",
+  );
+
+  children.insert(ids_two[3].clone());
+  let result_children = result
+    .children
+    .iter()
+    .map(|child| child.id.clone())
+    .collect();
+  assert!(
+    children.eq(&result_children),
+    "Expected children to be {children:?}, instead got {result_children:?}"
+  );
+
+  let ancestors = vec![
+    USER_ID1.to_string(),
+    ids_one[0].clone(),
+    ids_one[1].clone(),
+    ids_two[0].clone(),
+    ids_two[1].clone(),
+  ]
+  .into_iter()
+  .collect::<HashSet<_>>();
+  let result_ancestors = result
+    .ancestors
+    .iter()
+    .map(|child| child.id.clone())
+    .collect();
+  assert!(
+    ancestors.eq(&result_ancestors),
+    "Expected ancestors to be {ancestors:?}, instead got {result_ancestors:?}"
+  );
 }

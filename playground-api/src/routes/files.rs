@@ -3,7 +3,7 @@ use crate::{
   auth::session::{FileId, FileIdVecQuery, Session},
   console::Colorize,
   db::files::{
-    aggregations::{FolderChildrenAndAncestors, FolderWithChildren},
+    aggregations::{FolderChildren, FolderChildrenAndAncestors},
     system::FileSystem,
     File, PartialFile, Video,
   },
@@ -268,7 +268,7 @@ fn extract_drive_file_id(share_link: &str) -> Option<String> {
 
 fn send_folder_changes(
   event_sender: &EventSender,
-  changes: Vec<FolderWithChildren>,
+  changes: Vec<FolderChildren>,
 ) -> APIResult {
   if event_sender.receiver_count() == 0 {
     log!(info@"There's {} folder changes but no one's listening. Message will not be sent", changes.len());

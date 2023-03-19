@@ -5,11 +5,12 @@ pub mod system;
 use super::{Collection, DBResult};
 use crate::string::NonEmptyString;
 use mongodb::bson::{doc, oid::ObjectId};
-use partial_struct::{partial, CamelFields};
+use partial_struct::{omit_and_create, partial, CamelFields};
 use serde::{Deserialize, Serialize};
 
 pub const ROOT_FOLDER_ALIAS: &str = "root";
 
+#[omit_and_create(BasicFileInfo)]
 #[partial]
 #[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +20,7 @@ pub struct File {
   pub folder_id: String,
   pub user_id: String,
   pub name: NonEmptyString,
+  #[omit]
   pub metadata: FileMetadata,
 }
 

@@ -1,5 +1,5 @@
 use super::{
-  aggregations::FolderWithChildren,
+  aggregations::FolderChildren,
   queries::{query_by_file, query_many_by_id},
   File,
 };
@@ -47,7 +47,7 @@ impl FileSystem {
     user_id: &str,
     files: &HashSet<String>,
     folder: &str,
-  ) -> FileSystemResult<(UpdateResult, Option<Vec<FolderWithChildren>>)> {
+  ) -> FileSystemResult<(UpdateResult, Option<Vec<FolderChildren>>)> {
     if files.contains(user_id) {
       return Err(FileSystemError::ReadOnly);
     }
@@ -87,7 +87,7 @@ impl FileSystem {
     &self,
     user_id: &str,
     ids: &HashSet<String>,
-  ) -> FileSystemResult<(u64, Vec<FolderWithChildren>)> {
+  ) -> FileSystemResult<(u64, Vec<FolderChildren>)> {
     if ids.contains(user_id) {
       return Err(FileSystemError::ReadOnly);
     }
@@ -114,7 +114,7 @@ impl FileSystem {
     file_id: &str,
     folder: Option<String>,
     name: Option<String>,
-  ) -> FileSystemResult<(File, Vec<FolderWithChildren>)> {
+  ) -> FileSystemResult<(File, Vec<FolderChildren>)> {
     if file_id == user_id {
       return Err(FileSystemError::ReadOnly);
     }
@@ -162,7 +162,7 @@ impl FileSystem {
   pub async fn create_one(
     &self,
     user_file: &File,
-  ) -> FileSystemResult<(File, Vec<FolderWithChildren>)> {
+  ) -> FileSystemResult<(File, Vec<FolderChildren>)> {
     let new_file = self.save_one(user_file).await?.ok_or_else(|| {
       FileSystemError::NameConflict(
         user_file.name.clone(),

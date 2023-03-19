@@ -1,38 +1,47 @@
 use super::{
   queries::{
-    query_all_children, query_all_parents, query_by_id, query_direct_children,
+    query_ancestors, query_by_id, query_children, query_lineage,
     query_many_by_id,
   },
   system::FileSystem,
-  DBResult, File,
+  BasicFileInfo, DBResult, File,
 };
 use format as f;
 use futures::TryStreamExt;
 use mongodb::bson::{doc, to_bson, Document};
 use partial_struct::{omit_and_create, CamelFields};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Deref};
 
 #[derive(Debug, Serialize, Deserialize, Clone, CamelFields)]
 #[serde(rename_all = "camelCase")]
-pub struct FolderWithChildren {
-  pub user_id: String,
-  pub folder_id: String,
+pub struct FolderChildren {
+  #[serde(flatten)]
+  file: BasicFileInfo,
   pub children: Vec<File>,
 }
 
-#[omit_and_create(FolderFamilyMember)]
+impl Deref for FolderChildren {
+  type Target = BasicFileInfo;
+  fn deref(&self) -> &Self::Target {
+    &self.file
+  }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderChildrenAndAncestors {
-  #[serde(rename = "_id")]
-  pub id: String,
-  pub folder_id: String,
-  pub name: String,
-  #[omit]
-  pub ancestors: Vec<FolderFamilyMember>,
-  #[omit]
-  pub children: Vec<FolderFamilyMember>,
+  #[serde(flatten)]
+  file: BasicFileInfo,
+  pub ancestors: Vec<BasicFileInfo>,
+  pub children: Vec<BasicFileInfo>,
+}
+
+impl Deref for FolderChildrenAndAncestors {
+  type Target = BasicFileInfo;
+  fn deref(&self) -> &Self::Target {
+    &self.file
+  }
 }
 
 #[omit_and_create(Lineage)]
@@ -60,13 +69,13 @@ impl FileSystem {
         ],
         File::user_id(): user_id
       } },
-      query_all_children(),
+      query_lineage(),
       doc! { "$project": {
         "dupedIds": {
-          "$concatArrays": [["$_id"], "$children._id"]
+          "$concatArrays": [["$_id"], "$lineage._id"]
         },
         "dupedFolderIds": {
-          "$concatArrays": [[f!("${}", File::folder_id())], f!("$children.{}", File::folder_id())]
+          "$concatArrays": [[f!("${}", File::folder_id())], f!("$lineage.{}", File::folder_id())]
         },
       } },
       doc! { "$unwind": "$dupedIds" },
@@ -93,19 +102,10 @@ impl FileSystem {
   pub async fn find_folder_with_children(
     &self,
     query: &Document,
-  ) -> DBResult<Vec<FolderWithChildren>> {
-    let pipeline = vec![
-      doc! { "$match": query },
-      query_direct_children(),
-      doc! { "$project": {
-        "_id": 0,
-        File::folder_id(): "$_id",
-        File::user_id(): 1,
-        "children": "$directChildren"
-      }},
-    ];
+  ) -> DBResult<Vec<FolderChildren>> {
+    let pipeline = vec![doc! { "$match": query }, query_children()];
 
-    self.aggregate::<FolderWithChildren>(pipeline).await
+    self.aggregate::<FolderChildren>(pipeline).await
   }
 
   pub async fn find_children_and_ancestors(
@@ -115,19 +115,8 @@ impl FileSystem {
   ) -> DBResult<Option<FolderChildrenAndAncestors>> {
     let pipeline = vec![
       doc! { "$match": query_by_id(user_id, folder_id)? },
-      query_all_parents(),
-      query_direct_children(),
-      doc! { "$project": {
-        "_id": 1,
-        File::name(): 1,
-        File::folder_id(): 1,
-        "ancestors._id": "parents._id",
-        f!("ancestors.{}", File::name()): f!("parents.{}", File::name()),
-        f!("ancestors.{}", File::folder_id()): f!("parents.{}", File::folder_id()),
-        "children._id": "directChildren._id",
-        f!("children.{}", File::name()): f!("directChildren.{}", File::name()),
-        f!("children.{}", File::folder_id()): f!("directChildren.{}", File::folder_id()),
-      } },
+      query_ancestors(),
+      query_children(),
     ];
 
     Ok(
@@ -153,8 +142,8 @@ impl FileSystem {
       self
         .aggregate::<Lineage>(vec![
           doc! { "$match": query_by_id(user_id, folder_id)? },
-          query_all_children(),
-          doc! { "$project": { "_id": 0, "lineage": "$children._id", } },
+          query_lineage(),
+          doc! { "$project": { "_id": 0, "lineage": "$lineage._id", } },
         ])
         .await?
         .pop()
@@ -169,16 +158,16 @@ impl FileSystem {
   ) -> DBResult<Option<LineageAndParents>> {
     let pipeline = vec![
       doc! { "$match": query_many_by_id(user_id, files)? },
-      query_all_children(),
-      doc! { "$addFields": { "children": { "$cond": {
-        "if": { "$eq": [ { "$size": "$children" }, 0 ] },
+      query_lineage(),
+      doc! { "$addFields": { "lineage": { "$cond": {
+        "if": { "$eq": [ { "$size": "$lineage" }, 0 ] },
         "then": [null],
-        "else": "$children"
+        "else": "$lineage"
       } } } },
-      doc! { "$unwind": "$children" },
+      doc! { "$unwind": "$lineage" },
       doc! { "$group": {
         "_id": null,
-        "lineage": { "$addToSet": "$children._id" },
+        "lineage": { "$addToSet": "$lineage._id" },
         "parents": { "$addToSet": f!("${}", File::folder_id()) },
       } },
       doc! { "$project": {

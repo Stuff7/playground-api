@@ -3,30 +3,30 @@ use format as f;
 use mongodb::bson::{doc, to_bson, to_document, Document};
 use std::collections::HashSet;
 
-pub(super) fn query_all_children() -> Document {
+pub(super) fn query_lineage() -> Document {
   doc! { "$graphLookup": {
     "from": File::collection_name(),
     "startWith": "$_id",
     "connectFromField": "_id",
     "connectToField": File::folder_id(),
-    "as": "children",
+    "as": "lineage",
     "maxDepth": 99,
   } }
 }
 
-pub(super) fn query_all_parents() -> Document {
+pub(super) fn query_ancestors() -> Document {
   doc! { "$graphLookup": {
     "from": File::collection_name(),
     "startWith": f!("${}", File::folder_id()),
     "connectFromField": File::folder_id(),
     "connectToField": "_id",
-    "as": "parents",
+    "as": "ancestors",
     "maxDepth": 99,
     "restrictSearchWithMatch": { "metadata.type": "folder" }
   } }
 }
 
-pub(super) fn query_direct_children() -> Document {
+pub(super) fn query_children() -> Document {
   doc! { "$lookup": {
     "from": File::collection_name(),
     "pipeline": [
@@ -38,7 +38,7 @@ pub(super) fn query_direct_children() -> Document {
     ],
     "localField": "_id",
     "foreignField": File::folder_id(),
-    "as": "directChildren",
+    "as": "children",
   } }
 }
 
