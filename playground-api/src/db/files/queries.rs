@@ -14,16 +14,29 @@ pub(super) fn query_lineage() -> Document {
   } }
 }
 
-pub(super) fn query_ancestors() -> Document {
-  doc! { "$graphLookup": {
-    "from": File::collection_name(),
-    "startWith": f!("${}", File::folder_id()),
-    "connectFromField": File::folder_id(),
-    "connectToField": "_id",
-    "as": "ancestors",
-    "maxDepth": 99,
-    "restrictSearchWithMatch": { "metadata.type": "folder" }
-  } }
+pub(super) fn query_ancestors() -> [Document; 5] {
+  [
+    doc! { "$graphLookup": {
+      "from": File::collection_name(),
+      "startWith": f!("${}", File::folder_id()),
+      "connectFromField": File::folder_id(),
+      "connectToField": "_id",
+      "as": "ancestors",
+      "maxDepth": 99,
+      "restrictSearchWithMatch": { "metadata.type": "folder" },
+      "depthField": "order"
+    } },
+    doc! { "$unwind": "$ancestors" },
+    doc! { "$sort": { "ancestors.order": -1 } },
+    doc! { "$group": {
+      "_id": "$_id",
+      "ancestors": { "$push": "$ancestors" },
+      "root": { "$first": "$$ROOT" }
+    } },
+    doc! { "$replaceRoot": { "newRoot": {
+      "$mergeObjects": [ "$root", { "ancestors": "$ancestors" } ]
+    } } },
+  ]
 }
 
 pub(super) fn query_children() -> Document {

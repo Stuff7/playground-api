@@ -34,7 +34,7 @@ pub struct FolderChildrenAndAncestors {
   #[serde(flatten)]
   file: BasicFileInfo,
   pub ancestors: Vec<BasicFileInfo>,
-  pub children: Vec<BasicFileInfo>,
+  pub children: Vec<File>,
 }
 
 impl Deref for FolderChildrenAndAncestors {
@@ -113,23 +113,17 @@ impl FileSystem {
     user_id: &str,
     folder_id: &str,
   ) -> DBResult<Option<FolderChildrenAndAncestors>> {
-    let pipeline = vec![
-      doc! { "$match": query_by_id(user_id, folder_id)? },
-      query_ancestors(),
-      query_children(),
-    ];
+    let pipeline = [doc! { "$match": query_by_id(user_id, folder_id)? }]
+      .into_iter()
+      .chain(query_ancestors())
+      .chain([query_children()])
+      .collect::<Vec<_>>();
 
     Ok(
       self
         .aggregate::<FolderChildrenAndAncestors>(pipeline)
         .await?
-        .pop()
-        .map(|mut family| {
-          family
-            .ancestors
-            .sort_by_key(|d| (d.id.clone(), d.folder_id.clone()));
-          family
-        }),
+        .pop(),
     )
   }
 
