@@ -14,7 +14,7 @@ pub(super) fn query_lineage() -> Document {
   } }
 }
 
-pub(super) fn query_ancestors() -> [Document; 5] {
+pub(super) fn query_ancestors() -> [Document; 3] {
   [
     doc! { "$graphLookup": {
       "from": File::collection_name(),
@@ -26,16 +26,25 @@ pub(super) fn query_ancestors() -> [Document; 5] {
       "restrictSearchWithMatch": { "metadata.type": "folder" },
       "depthField": "order"
     } },
-    doc! { "$unwind": "$ancestors" },
-    doc! { "$sort": { "ancestors.order": -1 } },
-    doc! { "$group": {
-      "_id": "$_id",
-      "ancestors": { "$push": "$ancestors" },
-      "root": { "$first": "$$ROOT" }
+    doc! { "$facet": {
+      "allFatherBranch": [{ "$match": { "ancestors": { "$eq": [] } } }],
+      "childBranch": [
+        { "$match": { "ancestors": { "$ne": [] } } },
+        { "$unwind": "$ancestors" },
+        { "$sort": { "ancestors.order": -1 } },
+        { "$group": {
+          "_id": "$_id",
+          "ancestors": { "$push": "$ancestors" },
+          "root": { "$first": "$$ROOT" }
+        } },
+        { "$replaceRoot": { "newRoot": {
+          "$mergeObjects": [ "$root", { "ancestors": "$ancestors" } ]
+        } } },
+      ]
     } },
-    doc! { "$replaceRoot": { "newRoot": {
-      "$mergeObjects": [ "$root", { "ancestors": "$ancestors" } ]
-    } } },
+    doc! { "$replaceRoot": { "newRoot": { "$first": {
+      "$cond": [{ "$eq": ["$allFatherBranch", []] }, "$childBranch", "$allFatherBranch"]
+    } } } },
   ]
 }
 
