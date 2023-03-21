@@ -42,7 +42,9 @@ impl File {
   ) -> DBResult<Self> {
     Ok(Self {
       id: ObjectId::new().to_hex(),
-      folder_id: folder_id.unwrap_or_else(|| user_id.clone()),
+      folder_id: folder_id
+        .map(|folder_id| Self::map_folder_id(&user_id, &folder_id).to_string())
+        .unwrap_or_else(|| user_id.clone()),
       user_id,
       name: custom_name
         .unwrap_or_else(|| video.name.clone())
